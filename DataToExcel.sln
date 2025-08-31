@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataToExcel", "DataToExcel\DataToExcel.csproj", "{D0289D5C-806E-4E05-930E-DE0CAC483BD8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataToExcel.Test", "DataToExcel.Test\DataToExcel.Test.csproj", "{D0969538-609A-4B65-A5D6-CB7C504D603E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D0289D5C-806E-4E05-930E-DE0CAC483BD8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0289D5C-806E-4E05-930E-DE0CAC483BD8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0289D5C-806E-4E05-930E-DE0CAC483BD8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0289D5C-806E-4E05-930E-DE0CAC483BD8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D0969538-609A-4B65-A5D6-CB7C504D603E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D0969538-609A-4B65-A5D6-CB7C504D603E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D0969538-609A-4B65-A5D6-CB7C504D603E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D0969538-609A-4B65-A5D6-CB7C504D603E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
