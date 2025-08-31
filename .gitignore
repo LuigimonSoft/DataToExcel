@@ -416,3 +416,11 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# Rider
+.idea/
+*.sln.iml
+
+# macOS
+.DS_Store
+._*
