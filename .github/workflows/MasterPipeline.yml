@@ -10,7 +10,7 @@ jobs:
 
     env:
       Solution_Name: DataToExcel.sln
-      Test_Project: DataToExcel.Tests.csproj
+      Test_Project: DataToExcel.Test.csproj
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
       SONAR_ORG: "luigimonsoft"
