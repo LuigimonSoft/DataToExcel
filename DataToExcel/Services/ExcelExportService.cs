@@ -118,7 +118,7 @@ public class ExcelExportService : IExcelExportService
                 {
                     Min = i,
                     Max = i,
-                    Hidden = col.Hidden ? true : (BooleanValue?)null
+                    Hidden = col.Hidden ? true : null
                 };
                 if (col.Width.HasValue)
                 {
@@ -155,8 +155,10 @@ public class ExcelExportService : IExcelExportService
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
         CancellationToken ct)
     {
-        var groupIndex = columns.Select((c, i) => new { c, i }).FirstOrDefault(x => x.c.Group)?.i;
-        string? groupField = groupIndex.HasValue ? columns[groupIndex.Value].FieldName : null;
+        var groupInfo = columns.Select((c, i) => new { c, i }).FirstOrDefault(x => x.c.Group);
+        var hasGroup = groupInfo is not null;
+        var groupIndexValue = hasGroup ? groupInfo.i : -1;
+        string? groupField = hasGroup ? columns[groupIndexValue].FieldName : null;
         object? currentGroup = null;
 
         foreach (var record in data)
@@ -182,7 +184,7 @@ public class ExcelExportService : IExcelExportService
             for (int i = 0; i < columns.Count; i++)
             {
                 var col = columns[i];
-                if (groupField is not null && i == groupIndex && !isGroupRow)
+                if (groupField is not null && i == groupIndexValue && !isGroupRow)
                 {
                     writer.WriteElement(new Cell());
                     continue;
