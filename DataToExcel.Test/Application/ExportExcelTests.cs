@@ -51,8 +51,7 @@ public class ExportExcelTests
         var useCase = new ExportExcel(
             new ExcelExportService(new ExcelStyleProvider()),
             new FileNamingService(),
-            repo,
-            new ExcelExportRegistrationOptions { ConnectionString = "UseDevelopmentStorage=true", ContainerName = "test" });
+            repo);
 
         // When
         var result = await useCase.ExecuteAsync(records, columns, "Report", options);

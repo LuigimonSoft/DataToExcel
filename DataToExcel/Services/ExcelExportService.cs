@@ -37,90 +37,7 @@ public class ExcelExportService : IExcelExportService
             stylesPart.Stylesheet = stylesheet;
             var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
 
-        using (var writer = OpenXmlWriter.Create(worksheetPart))
-        {
-            writer.WriteStartElement(new Worksheet());
-
-            if (options.FreezeHeader)
-            {
-                writer.WriteStartElement(new SheetViews());
-                writer.WriteElement(new SheetView
-                {
-                    WorkbookViewId = 0,
-                    Pane = new Pane
-                    {
-                        VerticalSplit = 1,
-                        TopLeftCell = "A2",
-                        ActivePane = PaneValues.BottomLeft,
-                        State = PaneStateValues.Frozen
-                    }
-                });
-                writer.WriteEndElement(); // SheetViews
-            }
-
-            if (columns.Any(c => c.Width.HasValue))
-            {
-                writer.WriteStartElement(new Columns());
-                uint i = 1;
-                foreach (var col in columns)
-                {
-                    if (col.Width.HasValue)
-                    {
-                        writer.WriteElement(new Column
-                        {
-                            Min = i,
-                            Max = i,
-                            Width = col.Width.Value,
-                            CustomWidth = true
-                        });
-                    }
-                    i++;
-                }
-                writer.WriteEndElement(); // Columns
-            }
-
-            writer.WriteStartElement(new SheetData());
-            // Header
-            writer.WriteStartElement(new Row());
-            foreach (var col in columns)
-            {
-                writer.WriteElement(new Cell
-                {
-                    DataType = CellValues.String,
-                    CellValue = new CellValue(col.Title),
-                    StyleIndex = styleMap[PredefinedStyle.Header]
-                });
-            }
-            writer.WriteEndElement(); // Row
-
-            foreach (var record in data)
-            {
-                ct.ThrowIfCancellationRequested();
-                writer.WriteStartElement(new Row());
-                foreach (var col in columns)
-                {
-                    var value = record[col.FieldName];
-                    if (value == DBNull.Value || value is null)
-                    {
-                        writer.WriteElement(new Cell());
-                        continue;
-                    }
-                    var cell = CreateCell(value, col, styleMap);
-                    writer.WriteElement(cell);
-                }
-                writer.WriteEndElement();
-            }
-            writer.WriteEndElement(); // SheetData
-
-            if (options.AutoFilter)
-            {
-                var endCol = GetColumnName(columns.Count);
-                writer.WriteElement(new AutoFilter { Reference = $"A1:{endCol}1" });
-            }
-
-            writer.WriteEndElement(); // Worksheet
-            writer.Close();
-        }
+            WriteWorksheet(worksheetPart, data, columns, options, styleMap, ct);
 
             var sheets = workbookPart.Workbook.AppendChild(new Sheets());
             sheets.Append(new Sheet
@@ -137,6 +54,119 @@ public class ExcelExportService : IExcelExportService
         {
             return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = ex.Message };
         }
+    }
+
+    private static void WriteWorksheet(WorksheetPart worksheetPart,
+        IEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        ExcelExportOptions options,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct)
+    {
+        using var writer = OpenXmlWriter.Create(worksheetPart);
+        writer.WriteStartElement(new Worksheet());
+
+        WriteSheetViews(writer, options);
+        WriteColumns(writer, columns);
+
+        writer.WriteStartElement(new SheetData());
+        WriteHeader(writer, columns, styleMap);
+        WriteRows(writer, data, columns, styleMap, ct);
+        writer.WriteEndElement(); // SheetData
+
+        WriteAutoFilter(writer, options, columns.Count);
+
+        writer.WriteEndElement(); // Worksheet
+        writer.Close();
+    }
+
+    private static void WriteSheetViews(OpenXmlWriter writer, ExcelExportOptions options)
+    {
+        if (!options.FreezeHeader) return;
+        writer.WriteStartElement(new SheetViews());
+        writer.WriteElement(new SheetView
+        {
+            WorkbookViewId = 0,
+            Pane = new Pane
+            {
+                VerticalSplit = 1,
+                TopLeftCell = "A2",
+                ActivePane = PaneValues.BottomLeft,
+                State = PaneStateValues.Frozen
+            }
+        });
+        writer.WriteEndElement(); // SheetViews
+    }
+
+    private static void WriteColumns(OpenXmlWriter writer, IReadOnlyList<ColumnDefinition> columns)
+    {
+        if (!columns.Any(c => c.Width.HasValue)) return;
+        writer.WriteStartElement(new Columns());
+        uint i = 1;
+        foreach (var col in columns)
+        {
+            if (col.Width.HasValue)
+            {
+                writer.WriteElement(new Column
+                {
+                    Min = i,
+                    Max = i,
+                    Width = col.Width.Value,
+                    CustomWidth = true
+                });
+            }
+            i++;
+        }
+        writer.WriteEndElement(); // Columns
+    }
+
+    private static void WriteHeader(OpenXmlWriter writer,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap)
+    {
+        writer.WriteStartElement(new Row());
+        foreach (var col in columns)
+        {
+            writer.WriteElement(new Cell
+            {
+                DataType = CellValues.String,
+                CellValue = new CellValue(col.Title),
+                StyleIndex = styleMap[PredefinedStyle.Header]
+            });
+        }
+        writer.WriteEndElement(); // Row
+    }
+
+    private static void WriteRows(OpenXmlWriter writer,
+        IEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct)
+    {
+        foreach (var record in data)
+        {
+            ct.ThrowIfCancellationRequested();
+            writer.WriteStartElement(new Row());
+            foreach (var col in columns)
+            {
+                var value = record[col.FieldName];
+                if (value == DBNull.Value || value is null)
+                {
+                    writer.WriteElement(new Cell());
+                    continue;
+                }
+                var cell = CreateCell(value, col, styleMap);
+                writer.WriteElement(cell);
+            }
+            writer.WriteEndElement();
+        }
+    }
+
+    private static void WriteAutoFilter(OpenXmlWriter writer, ExcelExportOptions options, int columnCount)
+    {
+        if (!options.AutoFilter) return;
+        var endCol = GetColumnName(columnCount);
+        writer.WriteElement(new AutoFilter { Reference = $"A1:{endCol}1" });
     }
 
     private static Cell CreateCell(object value, ColumnDefinition col,

@@ -11,17 +11,14 @@ public class ExportExcel : IExportExcel
     private readonly IExcelExportService _excelService;
     private readonly IFileNamingService _namingService;
     private readonly IBlobStorageRepository _blobRepository;
-    private readonly ExcelExportRegistrationOptions _options;
 
     public ExportExcel(IExcelExportService excelService,
         IFileNamingService namingService,
-        IBlobStorageRepository blobRepository,
-        ExcelExportRegistrationOptions options)
+        IBlobStorageRepository blobRepository)
     {
         _excelService = excelService;
         _namingService = namingService;
         _blobRepository = blobRepository;
-        _options = options;
     }
 
     public async Task<BlobUploadResult> ExecuteAsync(IEnumerable<IDataRecord> data,
@@ -38,7 +35,7 @@ public class ExportExcel : IExportExcel
             throw new InvalidOperationException(nameResponse.ErrorMessage ?? "File name generation failed");
         var fileName = nameResponse.Data;
 
-        var tempFile = Path.GetTempFileName();
+        var tempFile = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         try
         {
             await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.SequentialScan))

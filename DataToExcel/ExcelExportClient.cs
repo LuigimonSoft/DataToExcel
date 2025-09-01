@@ -59,7 +59,7 @@ public class ExcelExportClient : IExportExcel
                 ? new AzureBlobStorageRepository(options.ConnectionString!, options.ContainerName, options.DefaultSasTtl)
                 : new AzureBlobStorageRepository(options.ContainerUri!, options.Credential, options.DefaultSasTtl))
             : new AzureBlobStorageRepository(container, options.DefaultSasTtl);
-        return new ExportExcel(export, naming, repo, options);
+        return new ExportExcel(export, naming, repo);
     }
 
     public async Task<BlobUploadResult> ExecuteAsync(IEnumerable<IDataRecord> data,

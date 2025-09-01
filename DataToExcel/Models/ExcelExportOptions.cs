@@ -8,6 +8,5 @@ public class ExcelExportOptions
     public CultureInfo Culture { get; set; } = CultureInfo.InvariantCulture;
     public bool FreezeHeader { get; set; } = true;
     public bool AutoFilter { get; set; } = true;
-    public DateTime? DataDateUtc { get; set; }
-        = DateTime.UtcNow.Date;
+    public DateTime? DataDateUtc { get; set; } = DateTime.UtcNow.Date;
 }
