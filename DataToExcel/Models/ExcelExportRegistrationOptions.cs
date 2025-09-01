@@ -16,7 +16,7 @@ public class ExcelExportRegistrationOptions
         var hasUri = ContainerUri is not null;
         if (hasConn == hasUri)
             throw new InvalidOperationException("Specify either ConnectionString or ContainerUri but not both.");
-        if (!hasConn && string.IsNullOrWhiteSpace(ContainerName))
+        if (hasConn && string.IsNullOrWhiteSpace(ContainerName))
             throw new InvalidOperationException("ContainerName is required when using ConnectionString.");
     }
 }
