@@ -1,9 +1,11 @@
+using System.Diagnostics.CodeAnalysis;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using DataToExcel.Wrappers.Interfaces;
 
 namespace DataToExcel.Wrappers;
 
+[ExcludeFromCodeCoverage]
 public class BlobContainerClientWrapper : IBlobContainerClient
 {
     private readonly BlobContainerClient _inner;

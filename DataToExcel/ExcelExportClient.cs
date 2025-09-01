@@ -13,7 +13,7 @@ namespace DataToExcel;
 
 public class ExcelExportClient : IExportExcel
 {
-    private readonly IExportExcel _inner;
+    private readonly ExportExcel _inner;
 
     public ExcelExportClient(string connectionString, string containerName, TimeSpan? defaultSasTtl = null)
     {
