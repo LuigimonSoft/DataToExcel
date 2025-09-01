@@ -130,7 +130,7 @@ public class ExcelExportService : IExcelExportService
             writer.WriteElement(new Cell
             {
                 DataType = CellValues.String,
-                CellValue = new CellValue(col.Title),
+                CellValue = new CellValue(col.Title ?? string.Empty),
                 StyleIndex = styleMap[PredefinedStyle.Header]
             });
         }
@@ -180,7 +180,7 @@ public class ExcelExportService : IExcelExportService
             case ColumnDataType.Currency:
             case ColumnDataType.Percentage:
                 cell.DataType = CellValues.Number;
-                cell.CellValue = new CellValue(Convert.ToString(value, CultureInfo.InvariantCulture));
+                cell.CellValue = new CellValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty);
                 break;
             case ColumnDataType.DateTime:
                 cell.DataType = CellValues.Number;
@@ -193,7 +193,8 @@ public class ExcelExportService : IExcelExportService
                 break;
             default:
                 cell.DataType = CellValues.InlineString;
-                cell.InlineString = new InlineString(new Text(value.ToString()));
+                var s = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
+                cell.InlineString = new InlineString(new Text(s));
                 break;
         }
         return cell;

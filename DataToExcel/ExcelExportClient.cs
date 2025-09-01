@@ -47,18 +47,29 @@ public class ExcelExportClient : IExportExcel
         _inner = Build(options, container);
     }
 
-    private static IExportExcel Build(ExcelExportRegistrationOptions options, IBlobContainerClient? container = null)
+    private static ExportExcel Build(ExcelExportRegistrationOptions options, IBlobContainerClient? container = null)
     {
         if (container is null)
             options.Validate();
         IExcelStyleProvider style = new ExcelStyleProvider();
         IExcelExportService export = new ExcelExportService(style);
         IFileNamingService naming = new FileNamingService();
-        IBlobStorageRepository repo = container is null
-            ? (!string.IsNullOrWhiteSpace(options.ConnectionString)
-                ? new AzureBlobStorageRepository(options.ConnectionString!, options.ContainerName, options.DefaultSasTtl)
-                : new AzureBlobStorageRepository(options.ContainerUri!, options.Credential, options.DefaultSasTtl))
-            : new AzureBlobStorageRepository(container, options.DefaultSasTtl);
+        IBlobStorageRepository repo;
+        if (container is null)
+        {
+            if (!string.IsNullOrWhiteSpace(options.ConnectionString))
+            {
+                repo = new AzureBlobStorageRepository(options.ConnectionString!, options.ContainerName, options.DefaultSasTtl);
+            }
+            else
+            {
+                repo = new AzureBlobStorageRepository(options.ContainerUri!, options.Credential, options.DefaultSasTtl);
+            }
+        }
+        else
+        {
+            repo = new AzureBlobStorageRepository(container, options.DefaultSasTtl);
+        }
         return new ExportExcel(export, naming, repo);
     }
 
