@@ -68,6 +68,7 @@ public class ExcelExportService : IExcelExportService
 
         WriteSheetViews(writer, options);
         WriteColumns(writer, columns);
+        WriteSheetFormatProperties(writer, columns);
 
         writer.WriteStartElement(new SheetData());
         WriteHeader(writer, columns, styleMap);
@@ -98,22 +99,33 @@ public class ExcelExportService : IExcelExportService
         writer.WriteEndElement(); // SheetViews
     }
 
+    private static void WriteSheetFormatProperties(OpenXmlWriter writer, IReadOnlyList<ColumnDefinition> columns)
+    {
+        if (!columns.Any(c => c.Group)) return;
+        writer.WriteElement(new SheetFormatProperties { OutlineLevelRow = 1 });
+    }
+
     private static void WriteColumns(OpenXmlWriter writer, IReadOnlyList<ColumnDefinition> columns)
     {
-        if (!columns.Any(c => c.Width.HasValue)) return;
+        if (!columns.Any(c => c.Width.HasValue || c.Hidden)) return;
         writer.WriteStartElement(new Columns());
         uint i = 1;
         foreach (var col in columns)
         {
-            if (col.Width.HasValue)
+            if (col.Width.HasValue || col.Hidden)
             {
-                writer.WriteElement(new Column
+                var column = new Column
                 {
                     Min = i,
                     Max = i,
-                    Width = col.Width.Value,
-                    CustomWidth = true
-                });
+                    Hidden = col.Hidden ? true : (BooleanValue?)null
+                };
+                if (col.Width.HasValue)
+                {
+                    column.Width = col.Width.Value;
+                    column.CustomWidth = true;
+                }
+                writer.WriteElement(column);
             }
             i++;
         }
@@ -143,12 +155,38 @@ public class ExcelExportService : IExcelExportService
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
         CancellationToken ct)
     {
+        var groupIndex = columns.Select((c, i) => new { c, i }).FirstOrDefault(x => x.c.Group)?.i;
+        string? groupField = groupIndex.HasValue ? columns[groupIndex.Value].FieldName : null;
+        object? currentGroup = null;
+
         foreach (var record in data)
         {
             ct.ThrowIfCancellationRequested();
-            writer.WriteStartElement(new Row());
-            foreach (var col in columns)
+
+            bool isGroupRow = false;
+            if (groupField is not null)
             {
+                var value = record[groupField];
+                if (!Equals(value, currentGroup))
+                {
+                    currentGroup = value;
+                    isGroupRow = true;
+                }
+            }
+
+            var row = new Row();
+            if (groupField is not null && !isGroupRow)
+                row.OutlineLevel = 1;
+
+            writer.WriteStartElement(row);
+            for (int i = 0; i < columns.Count; i++)
+            {
+                var col = columns[i];
+                if (groupField is not null && i == groupIndex && !isGroupRow)
+                {
+                    writer.WriteElement(new Cell());
+                    continue;
+                }
                 var value = record[col.FieldName];
                 if (value == DBNull.Value || value is null)
                 {
