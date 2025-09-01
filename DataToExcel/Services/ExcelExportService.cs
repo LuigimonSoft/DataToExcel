@@ -117,9 +117,12 @@ public class ExcelExportService : IExcelExportService
                 var column = new Column
                 {
                     Min = i,
-                    Max = i,
-                    Hidden = col.Hidden ? true : null
+                    Max = i
                 };
+                if (col.Hidden)
+                {
+                    column.Hidden = true;
+                }
                 if (col.Width.HasValue)
                 {
                     column.Width = col.Width.Value;
@@ -155,50 +158,80 @@ public class ExcelExportService : IExcelExportService
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
         CancellationToken ct)
     {
-        var groupInfo = columns.Select((c, i) => new { c, i }).FirstOrDefault(x => x.c.Group);
-        var hasGroup = groupInfo is not null;
-        var groupIndexValue = hasGroup ? groupInfo.i : -1;
-        string? groupField = hasGroup ? columns[groupIndexValue].FieldName : null;
+        var (groupIndexValue, groupField) = GetGroupInfo(columns);
         object? currentGroup = null;
 
         foreach (var record in data)
         {
             ct.ThrowIfCancellationRequested();
 
-            bool isGroupRow = false;
-            if (groupField is not null)
-            {
-                var value = record[groupField];
-                if (!Equals(value, currentGroup))
-                {
-                    currentGroup = value;
-                    isGroupRow = true;
-                }
-            }
+            var isGroupRow = IsNewGroupRow(record, groupField, currentGroup, out var newGroupValue);
+            if (isGroupRow)
+                currentGroup = newGroupValue;
 
-            var row = new Row();
-            if (groupField is not null && !isGroupRow)
-                row.OutlineLevel = 1;
-
+            var row = CreateRow(groupField is not null, isGroupRow);
             writer.WriteStartElement(row);
-            for (int i = 0; i < columns.Count; i++)
-            {
-                var col = columns[i];
-                if (groupField is not null && i == groupIndexValue && !isGroupRow)
-                {
-                    writer.WriteElement(new Cell());
-                    continue;
-                }
-                var value = record[col.FieldName];
-                if (value == DBNull.Value || value is null)
-                {
-                    writer.WriteElement(new Cell());
-                    continue;
-                }
-                var cell = CreateCell(value, col, styleMap);
-                writer.WriteElement(cell);
-            }
+            WriteRowCells(writer, record, columns, styleMap, groupField, groupIndexValue, isGroupRow);
             writer.WriteEndElement();
+        }
+    }
+
+    private static (int groupIndex, string? groupField) GetGroupInfo(IReadOnlyList<ColumnDefinition> columns)
+    {
+        var groupInfo = columns.Select((c, i) => new { c, i }).FirstOrDefault(x => x.c.Group);
+        if (groupInfo is null)
+            return (-1, null);
+        return (groupInfo.i, columns[groupInfo.i].FieldName);
+    }
+
+    private static bool IsNewGroupRow(IDataRecord record, string? groupField, object? currentGroup, out object? newGroupValue)
+    {
+        newGroupValue = currentGroup;
+        if (groupField is null)
+            return false;
+
+        var value = record[groupField];
+        if (Equals(value, currentGroup))
+            return false;
+
+        newGroupValue = value;
+        return true;
+    }
+
+    private static Row CreateRow(bool hasGroup, bool isGroupRow)
+    {
+        var row = new Row();
+        if (hasGroup && !isGroupRow)
+            row.OutlineLevel = 1;
+        return row;
+    }
+
+    private static void WriteRowCells(OpenXmlWriter writer,
+        IDataRecord record,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        string? groupField,
+        int groupIndexValue,
+        bool isGroupRow)
+    {
+        for (int i = 0; i < columns.Count; i++)
+        {
+            var col = columns[i];
+            if (groupField is not null && i == groupIndexValue && !isGroupRow)
+            {
+                writer.WriteElement(new Cell());
+                continue;
+            }
+
+            var value = record[col.FieldName];
+            if (value == DBNull.Value || value is null)
+            {
+                writer.WriteElement(new Cell());
+                continue;
+            }
+
+            var cell = CreateCell(value, col, styleMap);
+            writer.WriteElement(cell);
         }
     }
 
