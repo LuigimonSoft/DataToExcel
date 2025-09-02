@@ -6,4 +6,6 @@ public record ColumnDefinition(
     ColumnDataType DataType,
     double? Width = null,
     PredefinedStyle? Style = null,
-    string? NumberFormatCode = null);
+    string? NumberFormatCode = null,
+    bool Hidden = false,
+    bool Group = false);
