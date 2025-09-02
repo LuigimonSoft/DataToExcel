@@ -10,16 +10,24 @@ public class ExcelStyleProvider : IExcelStyleProvider
     {
         try
         {
-            var fonts = new Fonts(
-                new Font(),
-                new Font(new Bold())
-            );
-            var fills = new Fills(
-                new Fill(new PatternFill { PatternType = PatternValues.None }),
-                new Fill(new PatternFill { PatternType = PatternValues.Gray125 })
-            );
-            var borders = new Borders(new Border());
-            var cellStyleFormats = new CellStyleFormats(new CellFormat());
+            var fonts = new Fonts();
+            fonts.AppendChild(new Font());
+            var boldFont = new Font();
+            boldFont.AppendChild(new Bold());
+            fonts.AppendChild(boldFont);
+
+            var fills = new Fills();
+            var fillNone = new Fill();
+            fillNone.AppendChild(new PatternFill { PatternType = PatternValues.None });
+            fills.AppendChild(fillNone);
+            var fillGray = new Fill();
+            fillGray.AppendChild(new PatternFill { PatternType = PatternValues.Gray125 });
+            fills.AppendChild(fillGray);
+
+            var borders = new Borders();
+            borders.AppendChild(new Border());
+            var cellStyleFormats = new CellStyleFormats();
+            cellStyleFormats.AppendChild(new CellFormat());
 
             uint nfId = 164; // custom formats
             var numberingFormats = new NumberingFormats();
@@ -30,31 +38,31 @@ public class ExcelStyleProvider : IExcelStyleProvider
             };
 
             // number
-            numberingFormats.Append(new NumberingFormat { NumberFormatId = nfId, FormatCode = "#,##0.00" });
+            numberingFormats.AppendChild(new NumberingFormat { NumberFormatId = nfId, FormatCode = "#,##0.00" });
             cellFormats.Add(new() { NumberFormatId = nfId, ApplyNumberFormat = true });
             var numberIdx = (uint)cellFormats.Count - 1;
             nfId++;
 
             // date
-            numberingFormats.Append(new NumberingFormat { NumberFormatId = nfId, FormatCode = "yyyy-mm-dd" });
+            numberingFormats.AppendChild(new NumberingFormat { NumberFormatId = nfId, FormatCode = "yyyy-mm-dd" });
             cellFormats.Add(new() { NumberFormatId = nfId, ApplyNumberFormat = true });
             var dateIdx = (uint)cellFormats.Count - 1;
             nfId++;
 
             // datetime
-            numberingFormats.Append(new NumberingFormat { NumberFormatId = nfId, FormatCode = "yyyy-mm-dd hh:mm:ss" });
+            numberingFormats.AppendChild(new NumberingFormat { NumberFormatId = nfId, FormatCode = "yyyy-mm-dd hh:mm:ss" });
             cellFormats.Add(new() { NumberFormatId = nfId, ApplyNumberFormat = true });
             var dateTimeIdx = (uint)cellFormats.Count - 1;
             nfId++;
 
             // currency
-            numberingFormats.Append(new NumberingFormat { NumberFormatId = nfId, FormatCode = "#,##0.00" });
+            numberingFormats.AppendChild(new NumberingFormat { NumberFormatId = nfId, FormatCode = "#,##0.00" });
             cellFormats.Add(new() { NumberFormatId = nfId, ApplyNumberFormat = true });
             var currencyIdx = (uint)cellFormats.Count - 1;
             nfId++;
 
             // percentage
-            numberingFormats.Append(new NumberingFormat { NumberFormatId = nfId, FormatCode = "0.00%" });
+            numberingFormats.AppendChild(new NumberingFormat { NumberFormatId = nfId, FormatCode = "0.00%" });
             cellFormats.Add(new() { NumberFormatId = nfId, ApplyNumberFormat = true });
             var percentageIdx = (uint)cellFormats.Count - 1;
 
@@ -79,7 +87,17 @@ public class ExcelStyleProvider : IExcelStyleProvider
                 [PredefinedStyle.Text] = textIdx
             };
 
-            var stylesheet = new Stylesheet(numberingFormats, fonts, fills, borders, cellStyleFormats, new CellFormats(cellFormats));
+            var cellFormatsElement = new CellFormats();
+            foreach (var cf in cellFormats)
+                cellFormatsElement.AppendChild(cf);
+
+            var stylesheet = new Stylesheet();
+            stylesheet.AppendChild(numberingFormats);
+            stylesheet.AppendChild(fonts);
+            stylesheet.AppendChild(fills);
+            stylesheet.AppendChild(borders);
+            stylesheet.AppendChild(cellStyleFormats);
+            stylesheet.AppendChild(cellFormatsElement);
             return new ServiceResponse<Stylesheet>(stylesheet) { IsSuccess = true };
         }
         catch (Exception ex)
