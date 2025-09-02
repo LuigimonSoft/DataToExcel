@@ -182,7 +182,7 @@ public class ExcelExportService : IExcelExportService
         var groupInfo = columns.Select((c, i) => new { c, i }).FirstOrDefault(x => x.c.Group);
         if (groupInfo is null)
             return (-1, null);
-        // /return (groupInfo.i, columns[groupInfo.i].FieldName);
+        return (groupInfo.i, columns[groupInfo.i].FieldName);
     }
 
     private static bool IsNewGroupRow(IDataRecord record, string? groupField, object? currentGroup, out object? newGroupValue)
