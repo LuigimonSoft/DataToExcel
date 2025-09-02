@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Text;
 using DataToExcel.Models;
 using DataToExcel.Services.Interfaces;
 using DocumentFormat.OpenXml;
@@ -40,7 +41,7 @@ public class ExcelExportService : IExcelExportService
             WriteWorksheet(worksheetPart, data, columns, options, styleMap, ct);
 
             var sheets = workbookPart.Workbook.AppendChild(new Sheets());
-            sheets.Append(new Sheet
+            sheets.AppendChild(new Sheet
             {
                 Id = workbookPart.GetIdOfPart(worksheetPart),
                 SheetId = 1,
@@ -267,7 +268,9 @@ public class ExcelExportService : IExcelExportService
             default:
                 cell.DataType = CellValues.InlineString;
                 var s = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
-                cell.InlineString = new InlineString(new Text(s));
+                var inline = new InlineString();
+                inline.AppendChild(new Text(s));
+                cell.InlineString = inline;
                 break;
         }
         return cell;
@@ -286,13 +289,13 @@ public class ExcelExportService : IExcelExportService
     private static string GetColumnName(int index)
     {
         var dividend = index;
-        var columnName = string.Empty;
+        var sb = new StringBuilder();
         while (dividend > 0)
         {
             var modulo = (dividend - 1) % 26;
-            columnName = Convert.ToChar(65 + modulo) + columnName;
+            sb.Insert(0, Convert.ToChar(65 + modulo));
             dividend = (dividend - modulo) / 26;
         }
-        return columnName;
+        return sb.ToString();
     }
 }
