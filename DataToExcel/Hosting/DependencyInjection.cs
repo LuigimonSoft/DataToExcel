@@ -28,7 +28,12 @@ public static class DependencyInjection
                 return new AzureBlobStorageRepository(options.ConnectionString!, options.ContainerName, options.DefaultSasTtl);
             return new AzureBlobStorageRepository(options.ContainerUri!, options.Credential, options.DefaultSasTtl);
         });
-        services.AddTransient<IExportExcel, ExportExcel>();
+        services.AddTransient<IExportExcel>(sp =>
+            new ExportExcel(
+                sp.GetRequiredService<IExcelExportService>(),
+                sp.GetRequiredService<IFileNamingService>(),
+                sp.GetRequiredService<IBlobStorageRepository>(),
+                options));
         return services;
     }
 
@@ -38,6 +43,7 @@ public static class DependencyInjection
         return services.AddExcelExport(opts =>
         {
             opts.ContainerName = bound.ContainerName;
+            opts.BlobPrefix = bound.BlobPrefix;
             opts.ConnectionString = bound.ConnectionString;
             opts.ContainerUri = bound.ContainerUri;
             opts.Credential = bound.Credential;

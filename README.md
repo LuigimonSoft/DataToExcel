@@ -48,6 +48,7 @@ Store the connection string and other settings in `appsettings.json`, environmen
   "ExcelExport": {
     "ConnectionString": "<SecureConnectionString>",
     "ContainerName": "reports",
+    "BlobPrefix": "exports/finance",
     "DefaultSasTtl": "02:00:00"
   }
 }
