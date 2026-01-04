@@ -87,6 +87,7 @@ public class ExcelExportClientTests
             b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()),
             Times.Once);
         Assert.NotNull(result);
+        Assert.StartsWith("exports/finance/", result.BlobName, StringComparison.Ordinal);
         Assert.EndsWith(".xlsx", result.BlobName);
     }
 
