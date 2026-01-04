@@ -5,6 +5,7 @@ namespace DataToExcel.Models;
 public class ExcelExportRegistrationOptions
 {
     public string ContainerName { get; set; } = string.Empty;
+    public string? BlobPrefix { get; set; }
     public TimeSpan DefaultSasTtl { get; set; } = TimeSpan.FromHours(1);
     public string? ConnectionString { get; set; }
     public Uri? ContainerUri { get; set; }

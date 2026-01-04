@@ -71,12 +71,69 @@ public class ExcelExportClientTests
             .Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
+        var client = new DataToExcel.ExcelExportClient(
+            containerMock.Object,
+            TimeSpan.FromMinutes(5),
+            blobPrefix: "exports/finance");
+
+        // When
+        var result = await client.ExecuteAsync(records, columns, "Report", options);
+
+        // Then
+        containerMock.Verify(
+            c => c.GetBlobClient(It.Is<string>(name => name.StartsWith("exports/finance/", StringComparison.Ordinal))),
+            Times.Once);
+        blobMock.Verify(
+            b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        Assert.NotNull(result);
+        Assert.StartsWith("exports/finance/", result.BlobName, StringComparison.Ordinal);
+        Assert.EndsWith(".xlsx", result.BlobName);
+    }
+
+    [Fact]
+    public async Task GivenContainerCtorWithoutPrefix_WhenExecuteAsync_ThenUploadsToRoot()
+    {
+        // Given sample data
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Rows.Add("Alice");
+        var reader = table.CreateDataReader();
+        var records = new List<IDataRecord>();
+        while (reader.Read()) records.Add(reader);
+
+        var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
+        var options = new ExcelExportOptions { SheetName = "Names" };
+
+        var containerMock = new Mock<IBlobContainerClient>();
+        var blobMock = new Mock<IBlobClient>();
+
+        containerMock.Setup(c => c.Name).Returns("test");
+        containerMock
+            .Setup(c => c.CreateIfNotExistsAsync(PublicAccessType.None, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        containerMock
+            .Setup(c => c.GetBlobClient(It.IsAny<string>()))
+            .Returns(blobMock.Object);
+
+        blobMock.Setup(b => b.CanGenerateSasUri).Returns(true);
+        blobMock.Setup(b => b.Uri).Returns(new Uri("https://example.com/blob"));
+        blobMock
+            .Setup(b => b.GenerateSasUri(It.IsAny<BlobSasBuilder>()))
+            .Returns(new Uri("https://example.com/blob?sas=1"));
+        blobMock
+            .Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
         var client = new DataToExcel.ExcelExportClient(containerMock.Object, TimeSpan.FromMinutes(5));
 
         // When
         var result = await client.ExecuteAsync(records, columns, "Report", options);
 
         // Then
+        containerMock.Verify(
+            c => c.GetBlobClient(It.Is<string>(name => !name.Contains('/', StringComparison.Ordinal))),
+            Times.Once);
         blobMock.Verify(
             b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()),
             Times.Once);
@@ -84,4 +141,3 @@ public class ExcelExportClientTests
         Assert.EndsWith(".xlsx", result.BlobName);
     }
 }
-

@@ -15,34 +15,37 @@ public class ExcelExportClient : IExportExcel
 {
     private readonly ExportExcel _inner;
 
-    public ExcelExportClient(string connectionString, string containerName, TimeSpan? defaultSasTtl = null)
+    public ExcelExportClient(string connectionString, string containerName, TimeSpan? defaultSasTtl = null, string? blobPrefix = null)
     {
         var options = new ExcelExportRegistrationOptions
         {
             ConnectionString = connectionString,
             ContainerName = containerName,
-            DefaultSasTtl = defaultSasTtl ?? TimeSpan.FromHours(1)
+            DefaultSasTtl = defaultSasTtl ?? TimeSpan.FromHours(1),
+            BlobPrefix = blobPrefix
         };
         _inner = Build(options);
     }
 
-    public ExcelExportClient(Uri containerUri, TokenCredential? credential = null, TimeSpan? defaultSasTtl = null)
+    public ExcelExportClient(Uri containerUri, TokenCredential? credential = null, TimeSpan? defaultSasTtl = null, string? blobPrefix = null)
     {
         var options = new ExcelExportRegistrationOptions
         {
             ContainerUri = containerUri,
             Credential = credential,
-            DefaultSasTtl = defaultSasTtl ?? TimeSpan.FromHours(1)
+            DefaultSasTtl = defaultSasTtl ?? TimeSpan.FromHours(1),
+            BlobPrefix = blobPrefix
         };
         _inner = Build(options);
     }
 
-    public ExcelExportClient(IBlobContainerClient container, TimeSpan? defaultSasTtl = null)
+    public ExcelExportClient(IBlobContainerClient container, TimeSpan? defaultSasTtl = null, string? blobPrefix = null)
     {
         var options = new ExcelExportRegistrationOptions
         {
             ContainerName = container.Name,
-            DefaultSasTtl = defaultSasTtl ?? TimeSpan.FromHours(1)
+            DefaultSasTtl = defaultSasTtl ?? TimeSpan.FromHours(1),
+            BlobPrefix = blobPrefix
         };
         _inner = Build(options, container);
     }
@@ -70,7 +73,7 @@ public class ExcelExportClient : IExportExcel
         {
             repo = new AzureBlobStorageRepository(container, options.DefaultSasTtl);
         }
-        return new ExportExcel(export, naming, repo);
+        return new ExportExcel(export, naming, repo, options);
     }
 
     public async Task<BlobUploadResult> ExecuteAsync(IEnumerable<IDataRecord> data,

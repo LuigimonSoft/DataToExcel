@@ -11,14 +11,17 @@ public class ExportExcel : IExportExcel
     private readonly IExcelExportService _excelService;
     private readonly IFileNamingService _namingService;
     private readonly IBlobStorageRepository _blobRepository;
+    private readonly ExcelExportRegistrationOptions _registrationOptions;
 
     public ExportExcel(IExcelExportService excelService,
         IFileNamingService namingService,
-        IBlobStorageRepository blobRepository)
+        IBlobStorageRepository blobRepository,
+        ExcelExportRegistrationOptions registrationOptions)
     {
         _excelService = excelService;
         _namingService = namingService;
         _blobRepository = blobRepository;
+        _registrationOptions = registrationOptions;
     }
 
     public async Task<BlobUploadResult> ExecuteAsync(IEnumerable<IDataRecord> data,
@@ -34,6 +37,7 @@ public class ExportExcel : IExportExcel
         if (!nameResponse.IsSuccess || nameResponse.Data is null)
             throw new InvalidOperationException(nameResponse.ErrorMessage ?? "File name generation failed");
         var fileName = nameResponse.Data;
+        var blobName = ComposeBlobName(_registrationOptions.BlobPrefix, fileName);
 
         var tempFile = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         try
@@ -44,7 +48,7 @@ public class ExportExcel : IExportExcel
                 if (!exportResponse.IsSuccess)
                     throw new InvalidOperationException(exportResponse.ErrorMessage ?? "Excel export failed");
                 fs.Position = 0;
-                var response = await _blobRepository.UploadExcelAsync(fs, fileName, sasTtl, ct);
+                var response = await _blobRepository.UploadExcelAsync(fs, blobName, sasTtl, ct);
                 if (!response.IsSuccess || response.Data is null)
                     throw new InvalidOperationException(response.ErrorMessage ?? "Blob upload failed");
                 return response.Data;
@@ -55,5 +59,17 @@ public class ExportExcel : IExportExcel
             if (File.Exists(tempFile))
                 File.Delete(tempFile);
         }
+    }
+
+    private static string ComposeBlobName(string? prefix, string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(prefix))
+            return fileName;
+
+        var cleaned = prefix.Replace('\\', '/').Trim('/');
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return fileName;
+
+        return $"{cleaned}/{fileName}";
     }
 }

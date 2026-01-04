@@ -15,7 +15,8 @@ public class DependencyInjectionTests
         var settings = new Dictionary<string, string?>
         {
             ["ConnectionString"] = "UseDevelopmentStorage=true",
-            ["ContainerName"] = "reports"
+            ["ContainerName"] = "reports",
+            ["BlobPrefix"] = "exports/finance"
         };
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(settings)
@@ -30,5 +31,6 @@ public class DependencyInjectionTests
         var opts = provider.GetRequiredService<ExcelExportRegistrationOptions>();
         Assert.Equal("UseDevelopmentStorage=true", opts.ConnectionString);
         Assert.Equal("reports", opts.ContainerName);
+        Assert.Equal("exports/finance", opts.BlobPrefix);
     }
 }

@@ -48,6 +48,7 @@ Store the connection string and other settings in `appsettings.json`, environmen
   "ExcelExport": {
     "ConnectionString": "<SecureConnectionString>",
     "ContainerName": "reports",
+    "BlobPrefix": "exports/finance",
     "DefaultSasTtl": "02:00:00"
   }
 }
@@ -62,11 +63,11 @@ services.AddExcelExport(configuration.GetSection("ExcelExport"));
 When dependency injection is not available, instantiate `ExcelExportClient` directly. Two constructors are provided: one for connection strings and another for RBAC/AAD scenarios.
 
 ```csharp
-// Using a connection string
-var client = new ExcelExportClient("<SecureConnectionString>", "reports");
+// Using a connection string (with a blob prefix for folder organization)
+var client = new ExcelExportClient("<SecureConnectionString>", "reports", blobPrefix: "exports/finance");
 
 // Or using a container URI and optional credential (for RBAC/AAD)
-var client = new ExcelExportClient(new Uri("https://account.blob.core.windows.net/reports"));
+var client = new ExcelExportClient(new Uri("https://account.blob.core.windows.net/reports"), blobPrefix: "exports/finance");
 
 var result = await client.ExecuteAsync(
     data: records,
