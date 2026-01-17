@@ -57,6 +57,48 @@ public class ExcelExportService : IExcelExportService
         }
     }
 
+    public async Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            if (!output.CanSeek)
+                throw new ArgumentException("Stream must be seekable", nameof(output));
+
+            var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
+            if (!styleResponse.IsSuccess || styleResponse.Data is null)
+                return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
+            var stylesheet = styleResponse.Data;
+
+            using var document = SpreadsheetDocument.Create(output, SpreadsheetDocumentType.Workbook, true);
+            var workbookPart = document.AddWorkbookPart();
+            workbookPart.Workbook = new Workbook();
+            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
+            stylesPart.Stylesheet = stylesheet;
+            var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+
+            await WriteWorksheet(worksheetPart, data, columns, options, styleMap, ct);
+
+            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+            sheets.AppendChild(new Sheet
+            {
+                Id = workbookPart.GetIdOfPart(worksheetPart),
+                SheetId = 1,
+                Name = options.SheetName
+            });
+            workbookPart.Workbook.Save();
+            await output.FlushAsync(ct);
+            return new ServiceResponse<Stream>(output) { IsSuccess = true };
+        }
+        catch (Exception ex)
+        {
+            return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = ex.Message };
+        }
+    }
+
     private static void WriteWorksheet(WorksheetPart worksheetPart,
         IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
@@ -74,6 +116,31 @@ public class ExcelExportService : IExcelExportService
         writer.WriteStartElement(new SheetData());
         WriteHeader(writer, columns, styleMap);
         WriteRows(writer, data, columns, styleMap, ct);
+        writer.WriteEndElement(); // SheetData
+
+        WriteAutoFilter(writer, options, columns.Count);
+
+        writer.WriteEndElement(); // Worksheet
+        writer.Close();
+    }
+
+    private static async Task WriteWorksheet(WorksheetPart worksheetPart,
+        IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        ExcelExportOptions options,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct)
+    {
+        using var writer = OpenXmlWriter.Create(worksheetPart);
+        writer.WriteStartElement(new Worksheet());
+
+        WriteSheetViews(writer, options);
+        WriteColumns(writer, columns);
+        WriteSheetFormatProperties(writer, columns);
+
+        writer.WriteStartElement(new SheetData());
+        WriteHeader(writer, columns, styleMap);
+        await WriteRows(writer, data, columns, styleMap, ct);
         writer.WriteEndElement(); // SheetData
 
         WriteAutoFilter(writer, options, columns.Count);
@@ -163,6 +230,30 @@ public class ExcelExportService : IExcelExportService
         object? currentGroup = null;
 
         foreach (var record in data)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var isGroupRow = IsNewGroupRow(record, groupField, currentGroup, out var newGroupValue);
+            if (isGroupRow)
+                currentGroup = newGroupValue;
+
+            var row = CreateRow(groupField is not null, isGroupRow);
+            writer.WriteStartElement(row);
+            WriteRowCells(writer, record, columns, styleMap, groupField, groupIndexValue, isGroupRow);
+            writer.WriteEndElement();
+        }
+    }
+
+    private static async Task WriteRows(OpenXmlWriter writer,
+        IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct)
+    {
+        var (groupIndexValue, groupField) = GetGroupInfo(columns);
+        object? currentGroup = null;
+
+        await foreach (var record in data.WithCancellation(ct))
         {
             ct.ThrowIfCancellationRequested();
 
