@@ -20,27 +20,27 @@ public class ExcelExportService : IExcelExportService
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default)
-        => ExportAsyncCore(output, options, ct, (worksheetPart, styleMap)
+        => ExportAsyncCore(output, options, (worksheetPart, styleMap)
             => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
                 writer =>
                 {
                     WriteRows(writer, data, columns, styleMap, ct);
                     return Task.CompletedTask;
-                }));
+                }), ct);
 
     public Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default)
-        => ExportAsyncCore(output, options, ct, (worksheetPart, styleMap)
+        => ExportAsyncCore(output, options, (worksheetPart, styleMap)
             => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
-                writer => WriteRows(writer, data, columns, styleMap, ct)));
+                writer => WriteRows(writer, data, columns, styleMap, ct)), ct);
 
     private async Task<ServiceResponse<Stream>> ExportAsyncCore(Stream output,
         ExcelExportOptions options,
-        CancellationToken ct,
-        Func<WorksheetPart, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeWorksheetAsync)
+        Func<WorksheetPart, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeWorksheetAsync,
+        CancellationToken ct)
     {
         try
         {
