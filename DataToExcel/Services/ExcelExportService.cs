@@ -15,11 +15,32 @@ public class ExcelExportService : IExcelExportService
     public ExcelExportService(IExcelStyleProvider styleProvider)
         => _styleProvider = styleProvider;
 
-    public async Task<ServiceResponse<Stream>> ExportAsync(IEnumerable<IDataRecord> data,
+    public Task<ServiceResponse<Stream>> ExportAsync(IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default)
+        => ExportAsyncCore(output, options, ct, (worksheetPart, styleMap)
+            => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
+                writer =>
+                {
+                    WriteRows(writer, data, columns, styleMap, ct);
+                    return Task.CompletedTask;
+                }));
+
+    public Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct = default)
+        => ExportAsyncCore(output, options, ct, (worksheetPart, styleMap)
+            => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
+                writer => WriteRows(writer, data, columns, styleMap, ct)));
+
+    private async Task<ServiceResponse<Stream>> ExportAsyncCore(Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct,
+        Func<WorksheetPart, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeWorksheetAsync)
     {
         try
         {
@@ -38,7 +59,7 @@ public class ExcelExportService : IExcelExportService
             stylesPart.Stylesheet = stylesheet;
             var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
 
-            WriteWorksheet(worksheetPart, data, columns, options, styleMap, ct);
+            await writeWorksheetAsync(worksheetPart, styleMap);
 
             var sheets = workbookPart.Workbook.AppendChild(new Sheets());
             sheets.AppendChild(new Sheet
@@ -57,54 +78,11 @@ public class ExcelExportService : IExcelExportService
         }
     }
 
-    public async Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
-        IReadOnlyList<ColumnDefinition> columns,
-        Stream output,
-        ExcelExportOptions options,
-        CancellationToken ct = default)
-    {
-        try
-        {
-            if (!output.CanSeek)
-                throw new ArgumentException("Stream must be seekable", nameof(output));
-
-            var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
-            if (!styleResponse.IsSuccess || styleResponse.Data is null)
-                return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
-            var stylesheet = styleResponse.Data;
-
-            using var document = SpreadsheetDocument.Create(output, SpreadsheetDocumentType.Workbook, true);
-            var workbookPart = document.AddWorkbookPart();
-            workbookPart.Workbook = new Workbook();
-            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
-            stylesPart.Stylesheet = stylesheet;
-            var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
-
-            await WriteWorksheet(worksheetPart, data, columns, options, styleMap, ct);
-
-            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
-            sheets.AppendChild(new Sheet
-            {
-                Id = workbookPart.GetIdOfPart(worksheetPart),
-                SheetId = 1,
-                Name = options.SheetName
-            });
-            workbookPart.Workbook.Save();
-            await output.FlushAsync(ct);
-            return new ServiceResponse<Stream>(output) { IsSuccess = true };
-        }
-        catch (Exception ex)
-        {
-            return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = ex.Message };
-        }
-    }
-
-    private static void WriteWorksheet(WorksheetPart worksheetPart,
-        IEnumerable<IDataRecord> data,
+    private static async Task WriteWorksheetAsync(WorksheetPart worksheetPart,
         IReadOnlyList<ColumnDefinition> columns,
         ExcelExportOptions options,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct)
+        Func<OpenXmlWriter, Task> writeRowsAsync)
     {
         using var writer = OpenXmlWriter.Create(worksheetPart);
         writer.WriteStartElement(new Worksheet());
@@ -115,32 +93,7 @@ public class ExcelExportService : IExcelExportService
 
         writer.WriteStartElement(new SheetData());
         WriteHeader(writer, columns, styleMap);
-        WriteRows(writer, data, columns, styleMap, ct);
-        writer.WriteEndElement(); // SheetData
-
-        WriteAutoFilter(writer, options, columns.Count);
-
-        writer.WriteEndElement(); // Worksheet
-        writer.Close();
-    }
-
-    private static async Task WriteWorksheet(WorksheetPart worksheetPart,
-        IAsyncEnumerable<IDataRecord> data,
-        IReadOnlyList<ColumnDefinition> columns,
-        ExcelExportOptions options,
-        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct)
-    {
-        using var writer = OpenXmlWriter.Create(worksheetPart);
-        writer.WriteStartElement(new Worksheet());
-
-        WriteSheetViews(writer, options);
-        WriteColumns(writer, columns);
-        WriteSheetFormatProperties(writer, columns);
-
-        writer.WriteStartElement(new SheetData());
-        WriteHeader(writer, columns, styleMap);
-        await WriteRows(writer, data, columns, styleMap, ct);
+        await writeRowsAsync(writer);
         writer.WriteEndElement(); // SheetData
 
         WriteAutoFilter(writer, options, columns.Count);
