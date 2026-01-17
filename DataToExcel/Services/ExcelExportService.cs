@@ -255,8 +255,6 @@ public class ExcelExportService : IExcelExportService
 
         await foreach (var record in data.WithCancellation(ct))
         {
-            ct.ThrowIfCancellationRequested();
-
             var isGroupRow = IsNewGroupRow(record, groupField, currentGroup, out var newGroupValue);
             if (isGroupRow)
                 currentGroup = newGroupValue;
