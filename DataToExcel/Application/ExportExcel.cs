@@ -30,6 +30,32 @@ public class ExportExcel : IExportExcel
         ExcelExportOptions options,
         TimeSpan? sasTtl = null,
         CancellationToken ct = default)
+        => await ExecuteWithExportAsync(
+            baseFileName,
+            options,
+            sasTtl,
+            stream => _excelService.ExportAsync(data, columns, stream, options, ct),
+            ct);
+
+    public async Task<BlobUploadResult> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        string baseFileName,
+        ExcelExportOptions options,
+        TimeSpan? sasTtl = null,
+        CancellationToken ct = default)
+        => await ExecuteWithExportAsync(
+            baseFileName,
+            options,
+            sasTtl,
+            stream => _excelService.ExportAsync(data, columns, stream, options, ct),
+            ct);
+
+    private async Task<BlobUploadResult> ExecuteWithExportAsync(
+        string baseFileName,
+        ExcelExportOptions options,
+        TimeSpan? sasTtl,
+        Func<Stream, Task<ServiceResponse<Stream>>> export,
+        CancellationToken ct)
     {
         var created = DateTime.UtcNow;
         var dataDate = options.DataDateUtc ?? created.Date;
@@ -44,7 +70,7 @@ public class ExportExcel : IExportExcel
         {
             await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.SequentialScan))
             {
-                var exportResponse = await _excelService.ExportAsync(data, columns, fs, options, ct);
+                var exportResponse = await export(fs);
                 if (!exportResponse.IsSuccess)
                     throw new InvalidOperationException(exportResponse.ErrorMessage ?? "Excel export failed");
                 fs.Position = 0;

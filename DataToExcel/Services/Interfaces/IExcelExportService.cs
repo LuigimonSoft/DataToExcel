@@ -10,4 +10,10 @@ public interface IExcelExportService
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default);
+
+    Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct = default);
 }

@@ -15,11 +15,32 @@ public class ExcelExportService : IExcelExportService
     public ExcelExportService(IExcelStyleProvider styleProvider)
         => _styleProvider = styleProvider;
 
-    public async Task<ServiceResponse<Stream>> ExportAsync(IEnumerable<IDataRecord> data,
+    public Task<ServiceResponse<Stream>> ExportAsync(IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default)
+        => ExportAsyncCore(output, options, (worksheetPart, styleMap)
+            => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
+                writer =>
+                {
+                    WriteRows(writer, data, columns, styleMap, ct);
+                    return Task.CompletedTask;
+                }), ct);
+
+    public Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct = default)
+        => ExportAsyncCore(output, options, (worksheetPart, styleMap)
+            => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
+                writer => WriteRows(writer, data, columns, styleMap, ct)), ct);
+
+    private async Task<ServiceResponse<Stream>> ExportAsyncCore(Stream output,
+        ExcelExportOptions options,
+        Func<WorksheetPart, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeWorksheetAsync,
+        CancellationToken ct)
     {
         try
         {
@@ -38,7 +59,7 @@ public class ExcelExportService : IExcelExportService
             stylesPart.Stylesheet = stylesheet;
             var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
 
-            WriteWorksheet(worksheetPart, data, columns, options, styleMap, ct);
+            await writeWorksheetAsync(worksheetPart, styleMap);
 
             var sheets = workbookPart.Workbook.AppendChild(new Sheets());
             sheets.AppendChild(new Sheet
@@ -57,12 +78,11 @@ public class ExcelExportService : IExcelExportService
         }
     }
 
-    private static void WriteWorksheet(WorksheetPart worksheetPart,
-        IEnumerable<IDataRecord> data,
+    private static async Task WriteWorksheetAsync(WorksheetPart worksheetPart,
         IReadOnlyList<ColumnDefinition> columns,
         ExcelExportOptions options,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct)
+        Func<OpenXmlWriter, Task> writeRowsAsync)
     {
         using var writer = OpenXmlWriter.Create(worksheetPart);
         writer.WriteStartElement(new Worksheet());
@@ -73,7 +93,7 @@ public class ExcelExportService : IExcelExportService
 
         writer.WriteStartElement(new SheetData());
         WriteHeader(writer, columns, styleMap);
-        WriteRows(writer, data, columns, styleMap, ct);
+        await writeRowsAsync(writer);
         writer.WriteEndElement(); // SheetData
 
         WriteAutoFilter(writer, options, columns.Count);
@@ -166,6 +186,28 @@ public class ExcelExportService : IExcelExportService
         {
             ct.ThrowIfCancellationRequested();
 
+            var isGroupRow = IsNewGroupRow(record, groupField, currentGroup, out var newGroupValue);
+            if (isGroupRow)
+                currentGroup = newGroupValue;
+
+            var row = CreateRow(groupField is not null, isGroupRow);
+            writer.WriteStartElement(row);
+            WriteRowCells(writer, record, columns, styleMap, groupField, groupIndexValue, isGroupRow);
+            writer.WriteEndElement();
+        }
+    }
+
+    private static async Task WriteRows(OpenXmlWriter writer,
+        IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct)
+    {
+        var (groupIndexValue, groupField) = GetGroupInfo(columns);
+        object? currentGroup = null;
+
+        await foreach (var record in data.WithCancellation(ct))
+        {
             var isGroupRow = IsNewGroupRow(record, groupField, currentGroup, out var newGroupValue);
             if (isGroupRow)
                 currentGroup = newGroupValue;

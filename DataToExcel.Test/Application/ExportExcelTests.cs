@@ -155,6 +155,21 @@ public class ExportExcelTests
         Assert.EndsWith(".xlsx", result.BlobName);
     }
 
+    [Fact]
+    public async Task GivenAsyncRecordsWhenExecuteAsyncThenBlobNameIsGenerated()
+    {
+        var (containerMock, useCase, syncRecords, columns, options) = BuildUseCase("async/reports");
+        var records = ToAsyncEnumerable(syncRecords);
+
+        var result = await useCase.ExecuteAsync(records, columns, "Report", options);
+
+        containerMock.Verify(
+            c => c.GetBlobClient(It.Is<string>(name => name.StartsWith("async/reports/", StringComparison.Ordinal))),
+            Times.Once);
+        Assert.StartsWith("async/reports/", result.BlobName, StringComparison.Ordinal);
+        Assert.EndsWith(".xlsx", result.BlobName);
+    }
+
     private static (Mock<IBlobContainerClient> containerMock,
         ExportExcel useCase,
         List<IDataRecord> records,
@@ -200,5 +215,14 @@ public class ExportExcelTests
             registrationOptions);
 
         return (containerMock, useCase, records, columns, options);
+    }
+
+    private static async IAsyncEnumerable<IDataRecord> ToAsyncEnumerable(IEnumerable<IDataRecord> records)
+    {
+        foreach (var record in records)
+        {
+            yield return record;
+            await Task.Yield();
+        }
     }
 }
