@@ -34,8 +34,8 @@ public class ExportExcel : IExportExcel
             baseFileName,
             options,
             sasTtl,
-            ct,
-            stream => _excelService.ExportAsync(data, columns, stream, options, ct));
+            stream => _excelService.ExportAsync(data, columns, stream, options, ct),
+            ct);
 
     public async Task<BlobUploadResult> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
@@ -47,15 +47,15 @@ public class ExportExcel : IExportExcel
             baseFileName,
             options,
             sasTtl,
-            ct,
-            stream => _excelService.ExportAsync(data, columns, stream, options, ct));
+            stream => _excelService.ExportAsync(data, columns, stream, options, ct),
+            ct);
 
     private async Task<BlobUploadResult> ExecuteWithExportAsync(
         string baseFileName,
         ExcelExportOptions options,
         TimeSpan? sasTtl,
-        CancellationToken ct,
-        Func<Stream, Task<ServiceResponse<Stream>>> export)
+        Func<Stream, Task<ServiceResponse<Stream>>> export,
+        CancellationToken ct)
     {
         var created = DateTime.UtcNow;
         var dataDate = options.DataDateUtc ?? created.Date;
