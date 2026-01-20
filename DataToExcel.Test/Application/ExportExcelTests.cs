@@ -1,5 +1,6 @@
 using System.Data;
 using DataToExcel.Application;
+using DataToExcel.Application.Interfaces;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
 using DataToExcel.Models;
@@ -78,7 +79,7 @@ public class ExportExcelTests
 
         var repo = new AzureBlobStorageRepository(containerMock.Object, TimeSpan.FromMinutes(5));
         var registrationOptions = new ExcelExportRegistrationOptions { BlobPrefix = "exports/reports" };
-        var useCase = new ExportExcel(
+        IExportExcel useCase = new ExportExcel(
             new ExcelExportService(new ExcelStyleProvider()),
             new FileNamingService(),
             repo,
@@ -135,7 +136,7 @@ public class ExportExcelTests
 
         var repo = new AzureBlobStorageRepository(containerMock.Object, TimeSpan.FromMinutes(5));
         var registrationOptions = new ExcelExportRegistrationOptions();
-        var useCase = new ExportExcel(
+        IExportExcel useCase = new ExportExcel(
             new ExcelExportService(new ExcelStyleProvider()),
             new FileNamingService(),
             repo,
@@ -171,7 +172,7 @@ public class ExportExcelTests
     }
 
     private static (Mock<IBlobContainerClient> containerMock,
-        ExportExcel useCase,
+        IExportExcel useCase,
         List<IDataRecord> records,
         List<ColumnDefinition> columns,
         ExcelExportOptions options) BuildUseCase(string? blobPrefix)
