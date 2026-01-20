@@ -11,4 +11,11 @@ public interface IExportExcel
         ExcelExportOptions options,
         TimeSpan? sasTtl = null,
         CancellationToken ct = default);
+
+    Task<BlobUploadResult> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
+    IReadOnlyList<ColumnDefinition> columns,
+    string baseFileName,
+    ExcelExportOptions options,
+    TimeSpan? sasTtl = null,
+    CancellationToken ct = default);
 }

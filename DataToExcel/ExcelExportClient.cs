@@ -83,4 +83,12 @@ public class ExcelExportClient : IExportExcel
         TimeSpan? sasTtl = null,
         CancellationToken ct = default) =>
         await _inner.ExecuteAsync(data, columns, baseFileName, options, sasTtl, ct);
+
+    public async Task<BlobUploadResult> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        string baseFileName,
+        ExcelExportOptions options,
+        TimeSpan? sasTtl = null,
+        CancellationToken ct = default) =>
+        await _inner.ExecuteAsync(data, columns, baseFileName, options, sasTtl, ct);
 }
