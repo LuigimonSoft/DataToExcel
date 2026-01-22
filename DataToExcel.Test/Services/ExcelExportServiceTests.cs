@@ -387,9 +387,9 @@ public class ExcelExportServiceTests
         table.Columns.Add("Name", typeof(string));
         table.Columns.Add("Age", typeof(int));
         table.Rows.Add("Alice", 30);
-        var queryBuilder = new PostgreQueryBuilder(table)
+        var queryBuilder = new DataTableProjectionBuilder(table)
             .Select("Age", "Name");
-        var executor = new PostgreQueryExecutor();
+        var executor = new DataTableProjectionExecutor();
         var records = executor.ExecuteAsync(queryBuilder);
 
         var columns = new List<ColumnDefinition>
@@ -508,17 +508,17 @@ public class ExcelExportServiceTests
         }
     }
 
-    private sealed class PostgreQueryBuilder
+    private sealed class DataTableProjectionBuilder
     {
         private readonly DataTable _table;
         private IReadOnlyList<string> _selectedColumns = Array.Empty<string>();
 
-        public PostgreQueryBuilder(DataTable table)
+        public DataTableProjectionBuilder(DataTable table)
         {
             _table = table;
         }
 
-        public PostgreQueryBuilder Select(params string[] columns)
+        public DataTableProjectionBuilder Select(params string[] columns)
         {
             _selectedColumns = columns;
             return this;
@@ -547,9 +547,9 @@ public class ExcelExportServiceTests
         }
     }
 
-    private sealed class PostgreQueryExecutor
+    private sealed class DataTableProjectionExecutor
     {
-        public IAsyncEnumerable<IDataRecord> ExecuteAsync(PostgreQueryBuilder builder)
+        public IAsyncEnumerable<IDataRecord> ExecuteAsync(DataTableProjectionBuilder builder)
         {
             var table = builder.Build();
             return new ForwardOnlyAsyncRecords(table);
