@@ -186,13 +186,14 @@ public class ExcelExportService : IExcelExportService
         {
             ct.ThrowIfCancellationRequested();
 
-            var isGroupRow = IsNewGroupRow(record, groupField, currentGroup, out var newGroupValue);
+            var dataRow = CreateDisconnectedRow(record, columns);
+            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
             if (isGroupRow)
                 currentGroup = newGroupValue;
 
             var row = CreateRow(groupField is not null, isGroupRow);
             writer.WriteStartElement(row);
-            WriteRowCells(writer, record, columns, styleMap, groupField, groupIndexValue, isGroupRow);
+            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
             writer.WriteEndElement();
         }
     }
@@ -208,13 +209,14 @@ public class ExcelExportService : IExcelExportService
 
         await foreach (var record in data.WithCancellation(ct))
         {
-            var isGroupRow = IsNewGroupRow(record, groupField, currentGroup, out var newGroupValue);
+            var dataRow = CreateDisconnectedRow(record, columns);
+            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
             if (isGroupRow)
                 currentGroup = newGroupValue;
 
             var row = CreateRow(groupField is not null, isGroupRow);
             writer.WriteStartElement(row);
-            WriteRowCells(writer, record, columns, styleMap, groupField, groupIndexValue, isGroupRow);
+            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
             writer.WriteEndElement();
         }
     }
@@ -227,13 +229,13 @@ public class ExcelExportService : IExcelExportService
         return (groupInfo.i, columns[groupInfo.i].FieldName);
     }
 
-    private static bool IsNewGroupRow(IDataRecord record, string? groupField, object? currentGroup, out object? newGroupValue)
+    private static bool IsNewGroupRow(DataRow dataRow, string? groupField, object? currentGroup, out object? newGroupValue)
     {
         newGroupValue = currentGroup;
         if (groupField is null)
             return false;
 
-        var value = record[groupField];
+        var value = dataRow[groupField];
         if (Equals(value, currentGroup))
             return false;
 
@@ -250,14 +252,13 @@ public class ExcelExportService : IExcelExportService
     }
 
     private static void WriteRowCells(OpenXmlWriter writer,
-        IDataRecord record,
+        DataRow dataRow,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
         string? groupField,
         int groupIndexValue,
         bool isGroupRow)
     {
-        var dataRow = CreateDisconnectedRow(record, columns);
         for (int i = 0; i < columns.Count; i++)
         {
             var col = columns[i];
