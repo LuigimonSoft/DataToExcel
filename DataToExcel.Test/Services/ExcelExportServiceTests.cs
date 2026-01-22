@@ -380,6 +380,42 @@ public class ExcelExportServiceTests
         });
     }
 
+    [Fact]
+    public async Task GivenForwardOnlyAsyncRecordsWithColumnOrderMismatchWhenExportAsyncThenCellsFollowColumnDefinition()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Columns.Add("Age", typeof(int));
+        table.Rows.Add("Alice", 30);
+        var queryBuilder = new PostgreQueryBuilder(table)
+            .Select("Age", "Name");
+        var executor = new PostgreQueryExecutor();
+        var records = executor.ExecuteAsync(queryBuilder);
+
+        var columns = new List<ColumnDefinition>
+        {
+            new("Age","Age", ColumnDataType.Number),
+            new("Name","Name", ColumnDataType.String)
+        };
+        var service = new ExcelExportService(new ExcelStyleProvider());
+        using var ms = new MemoryStream();
+
+        var response = await service.ExportAsync(records, columns, ms, new ExcelExportOptions());
+
+        Assert.True(response.IsSuccess);
+        ms.Position = 0;
+        using var doc = SpreadsheetDocument.Open(ms, false);
+        var sheet = doc.WorkbookPart!.WorksheetParts.First().Worksheet;
+        var rows = sheet.GetFirstChild<SheetData>()!.Elements<Row>().ToList();
+        var headerCells = rows[0].Elements<Cell>().ToList();
+        var dataCells = rows[1].Elements<Cell>().ToList();
+
+        Assert.Equal("Age", headerCells[0].CellValue!.Text);
+        Assert.Equal("Name", headerCells[1].CellValue!.Text);
+        Assert.Equal("30", dataCells[0].CellValue!.Text);
+        Assert.Equal("Alice", dataCells[1].InnerText);
+    }
+
     private static DataTable BuildGroupedTable(bool withItem = false)
     {
         var table = new DataTable();
@@ -469,6 +505,54 @@ public class ExcelExportServiceTests
             }
 
             return new ValueTask<bool>(_reader.Read());
+        }
+    }
+
+    private sealed class PostgreQueryBuilder
+    {
+        private readonly DataTable _table;
+        private IReadOnlyList<string> _selectedColumns = Array.Empty<string>();
+
+        public PostgreQueryBuilder(DataTable table)
+        {
+            _table = table;
+        }
+
+        public PostgreQueryBuilder Select(params string[] columns)
+        {
+            _selectedColumns = columns;
+            return this;
+        }
+
+        public DataTable Build()
+        {
+            if (_selectedColumns.Count == 0)
+            {
+                return _table;
+            }
+
+            var projection = new DataTable();
+            foreach (var column in _selectedColumns)
+            {
+                projection.Columns.Add(column, _table.Columns[column]!.DataType);
+            }
+
+            foreach (DataRow row in _table.Rows)
+            {
+                var values = _selectedColumns.Select(col => row[col]).ToArray();
+                projection.Rows.Add(values);
+            }
+
+            return projection;
+        }
+    }
+
+    private sealed class PostgreQueryExecutor
+    {
+        public IAsyncEnumerable<IDataRecord> ExecuteAsync(PostgreQueryBuilder builder)
+        {
+            var table = builder.Build();
+            return new ForwardOnlyAsyncRecords(table);
         }
     }
 }
