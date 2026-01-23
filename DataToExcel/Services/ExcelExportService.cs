@@ -195,6 +195,7 @@ public class ExcelExportService : IExcelExportService
             writer.WriteStartElement(row);
             WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
             writer.WriteEndElement();
+            ClearDataRow(dataRow);
         }
     }
 
@@ -218,6 +219,7 @@ public class ExcelExportService : IExcelExportService
             writer.WriteStartElement(row);
             WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
             writer.WriteEndElement();
+            ClearDataRow(dataRow);
         }
     }
 
@@ -282,6 +284,12 @@ public class ExcelExportService : IExcelExportService
 
     private static DataRow CreateDisconnectedRow(IDataRecord record, IReadOnlyList<ColumnDefinition> columns)
     {
+        var recordValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < record.FieldCount; i++)
+        {
+            recordValues[record.GetName(i)] = record.IsDBNull(i) ? DBNull.Value : record.GetValue(i);
+        }
+
         var table = new DataTable();
         foreach (var col in columns)
         {
@@ -291,10 +299,22 @@ public class ExcelExportService : IExcelExportService
         var row = table.NewRow();
         foreach (var col in columns)
         {
-            row[col.FieldName] = record[col.FieldName] ?? DBNull.Value;
+            if (recordValues.TryGetValue(col.FieldName, out var value))
+            {
+                row[col.FieldName] = value ?? DBNull.Value;
+            }
+            else
+            {
+                row[col.FieldName] = DBNull.Value;
+            }
         }
 
         return row;
+    }
+
+    private static void ClearDataRow(DataRow row)
+    {
+        row.Table?.Clear();
     }
 
     private static void WriteAutoFilter(OpenXmlWriter writer, ExcelExportOptions options, int columnCount)
