@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using DataToExcel.Models;
 using DataToExcel.Services.Interfaces;
+using DataToExcel.Utilities;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
@@ -20,15 +21,7 @@ public class ExcelExportService : IExcelExportService
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default)
-        => options.SplitIntoMultipleSheets
-            ? ExportMultipleSheetsAsync(data, columns, output, options, ct)
-            : ExportAsyncCore(output, options, (worksheetPart, styleMap)
-            => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
-                writer =>
-                {
-                    WriteRows(writer, data, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
-                    return Task.CompletedTask;
-                }), ct);
+        => ExportAsync(AsyncEnumerableHelpers.ToAsyncEnumerable(data, ct), columns, output, options, ct);
 
     public Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
@@ -40,30 +33,6 @@ public class ExcelExportService : IExcelExportService
             : ExportAsyncCore(output, options, (worksheetPart, styleMap)
             => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
                 writer => WriteRows(writer, data, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet)), ct);
-
-    private Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IEnumerable<IDataRecord> data,
-        IReadOnlyList<ColumnDefinition> columns,
-        Stream output,
-        ExcelExportOptions options,
-        CancellationToken ct)
-        => ExportMultipleSheetsAsyncCore(output, options, ct, async (workbookPart, sheets, styleMap) =>
-        {
-            using var enumerator = data.GetEnumerator();
-            var bufferedEnumerator = new BufferedRecordEnumerator(enumerator);
-            var sheetIndex = 1;
-            var hasMore = true;
-
-            do
-            {
-                await AddSheetAsync(workbookPart, sheets, sheetIndex, columns, options, styleMap, writer =>
-                {
-                    WriteRows(writer, bufferedEnumerator, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
-                    return Task.CompletedTask;
-                });
-                sheetIndex++;
-                hasMore = bufferedEnumerator.TryPeekNext(out _);
-            } while (hasMore);
-        });
 
     private Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
@@ -259,37 +228,6 @@ public class ExcelExportService : IExcelExportService
         writer.WriteEndElement(); // Row
     }
 
-    private static void WriteRows(OpenXmlWriter writer,
-        IEnumerable<IDataRecord> data,
-        IReadOnlyList<ColumnDefinition> columns,
-        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct,
-        int maxRows)
-    {
-        using var enumerator = data.GetEnumerator();
-        WriteRowsCore(writer, columns, styleMap, ct, maxRows, enforceLimit: true, moveNext: enumerator.MoveNext,
-            current: () => enumerator.Current);
-    }
-
-    private static void WriteRows(OpenXmlWriter writer,
-        BufferedRecordEnumerator data,
-        IReadOnlyList<ColumnDefinition> columns,
-        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct,
-        int maxRows)
-    {
-        IDataRecord? currentRecord = null;
-        WriteRowsCore(writer, columns, styleMap, ct, maxRows, enforceLimit: false,
-            moveNext: () =>
-            {
-                if (!data.TryGetNext(out var record))
-                    return false;
-                currentRecord = record;
-                return true;
-            },
-            current: () => currentRecord);
-    }
-
     private static async Task WriteRows(OpenXmlWriter writer,
         IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
@@ -332,38 +270,6 @@ public class ExcelExportService : IExcelExportService
             SheetId = (uint)sheetIndex,
             Name = ComposeSheetName(options.SheetName, sheetIndex)
         });
-    }
-
-    private static void WriteRowsCore(OpenXmlWriter writer,
-        IReadOnlyList<ColumnDefinition> columns,
-        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct,
-        int maxRows,
-        bool enforceLimit,
-        Func<bool> moveNext,
-        Func<IDataRecord?> current)
-    {
-        var (groupIndexValue, groupField) = GetGroupInfo(columns);
-        object? currentGroup = null;
-        var written = 0;
-
-        while (moveNext())
-        {
-            ct.ThrowIfCancellationRequested();
-            if (written >= maxRows)
-            {
-                if (enforceLimit)
-                {
-                    throw new InvalidOperationException(
-                        $"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
-                }
-                break;
-            }
-
-            var record = current() ?? throw new InvalidOperationException("Expected record instance.");
-            WriteRow(writer, record, columns, styleMap, groupField, groupIndexValue, ref currentGroup);
-            written++;
-        }
     }
 
     private static async Task WriteRowsCoreAsync(OpenXmlWriter writer,
@@ -435,100 +341,6 @@ public class ExcelExportService : IExcelExportService
         if (sheetName.Length <= available)
             return sheetName;
         return sheetName[..available];
-    }
-
-    private sealed class BufferedRecordEnumerator
-    {
-        private readonly IEnumerator<IDataRecord> _inner;
-        private bool _hasBuffered;
-        private IDataRecord? _buffered;
-
-        public BufferedRecordEnumerator(IEnumerator<IDataRecord> inner)
-            => _inner = inner;
-
-        public bool TryGetNext(out IDataRecord record)
-        {
-            if (_hasBuffered)
-            {
-                record = _buffered ?? throw new InvalidOperationException("Buffered record expected.");
-                _buffered = null;
-                _hasBuffered = false;
-                return true;
-            }
-
-            if (_inner.MoveNext())
-            {
-                record = _inner.Current;
-                return true;
-            }
-
-            record = null!;
-            return false;
-        }
-
-        public bool TryPeekNext(out IDataRecord? record)
-        {
-            if (_hasBuffered)
-            {
-                record = _buffered;
-                return true;
-            }
-
-            if (_inner.MoveNext())
-            {
-                _buffered = _inner.Current;
-                _hasBuffered = true;
-                record = _buffered;
-                return true;
-            }
-
-            record = null;
-            return false;
-        }
-    }
-
-    private sealed class BufferedAsyncRecordEnumerator
-    {
-        private readonly IAsyncEnumerator<IDataRecord> _inner;
-        private bool _hasBuffered;
-        public IDataRecord? Current { get; private set; }
-
-        public BufferedAsyncRecordEnumerator(IAsyncEnumerator<IDataRecord> inner)
-            => _inner = inner;
-
-        public async Task<bool> TryGetNextAsync()
-        {
-            if (_hasBuffered)
-            {
-                _hasBuffered = false;
-                return true;
-            }
-
-            if (await _inner.MoveNextAsync())
-            {
-                Current = _inner.Current;
-                return true;
-            }
-
-            Current = null;
-            return false;
-        }
-
-        public async Task<bool> TryPeekNextAsync()
-        {
-            if (_hasBuffered)
-                return true;
-
-            if (await _inner.MoveNextAsync())
-            {
-                Current = _inner.Current;
-                _hasBuffered = true;
-                return true;
-            }
-
-            Current = null;
-            return false;
-        }
     }
 
     private static (int groupIndex, string? groupField) GetGroupInfo(IReadOnlyList<ColumnDefinition> columns)

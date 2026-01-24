@@ -4,6 +4,7 @@ using DataToExcel.Application.Interfaces;
 using DataToExcel.Models;
 using DataToExcel.Repositories.Interfaces;
 using DataToExcel.Services.Interfaces;
+using DataToExcel.Utilities;
 
 namespace DataToExcel.Application;
 
@@ -31,18 +32,7 @@ public class ExportExcel : IExportExcel
         ExcelExportOptions options,
         TimeSpan? sasTtl = null,
         CancellationToken ct = default)
-        => ExecuteAsyncCore(
-            options,
-            () => ExecuteMultipleFileExportsAsync(data, columns, baseFileName, options, sasTtl, ct),
-            () => ExecuteSingleExportAsync(
-                baseFileName,
-                null,
-                options,
-                sasTtl,
-                stream => _excelService.ExportAsync(data, columns, stream, options, ct),
-                ct,
-                appendFileIndex: false,
-                fileIndex: 1));
+        => ExecuteAsync(AsyncEnumerableHelpers.ToAsyncEnumerable(data, ct), columns, baseFileName, options, sasTtl, ct);
 
     public Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
@@ -75,30 +65,6 @@ public class ExportExcel : IExportExcel
 
         var result = await executeSingleAsync();
         return new[] { result };
-    }
-
-    private async Task<IReadOnlyList<BlobUploadResult>> ExecuteMultipleFileExportsAsync(
-        IEnumerable<IDataRecord> data,
-        IReadOnlyList<ColumnDefinition> columns,
-        string baseFileName,
-        ExcelExportOptions options,
-        TimeSpan? sasTtl,
-        CancellationToken ct)
-    {
-        using var enumerator = data.GetEnumerator();
-        var bufferedEnumerator = new BufferedRecordEnumerator(enumerator);
-        var exportOptions = CloneOptions(options, splitIntoMultipleSheets: false, splitIntoMultipleFiles: false);
-        var baseGeneratedName = BuildBaseGeneratedName(baseFileName, options);
-        return await ExecuteMultipleFileExportsAsyncCore(
-            baseGeneratedName,
-            sasTtl,
-            () =>
-            {
-                var chunk = TakeNext(bufferedEnumerator, ExcelExportLimits.MaxDataRowsPerSheet, ct);
-                return ExportToTempFileAsync(stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct), ct);
-            },
-            () => Task.FromResult(bufferedEnumerator.TryPeekNext(out _)),
-            ct);
     }
 
     private async Task<IReadOnlyList<BlobUploadResult>> ExecuteMultipleFileExportsAsync(
@@ -189,17 +155,6 @@ public class ExportExcel : IExportExcel
         {
             if (File.Exists(tempFile))
                 File.Delete(tempFile);
-        }
-    }
-
-    private static IEnumerable<IDataRecord> TakeNext(BufferedRecordEnumerator enumerator, int maxRows, CancellationToken ct)
-    {
-        var written = 0;
-        while (written < maxRows && enumerator.TryGetNext(out var record))
-        {
-            ct.ThrowIfCancellationRequested();
-            yield return record;
-            written++;
         }
     }
 
@@ -314,100 +269,6 @@ public class ExportExcel : IExportExcel
         if (!response.IsSuccess || response.Data is null)
             throw new InvalidOperationException(response.ErrorMessage ?? "Blob upload failed");
         return response.Data;
-    }
-
-    private sealed class BufferedRecordEnumerator
-    {
-        private readonly IEnumerator<IDataRecord> _inner;
-        private bool _hasBuffered;
-        private IDataRecord? _buffered;
-
-        public BufferedRecordEnumerator(IEnumerator<IDataRecord> inner)
-            => _inner = inner;
-
-        public bool TryGetNext(out IDataRecord record)
-        {
-            if (_hasBuffered)
-            {
-                record = _buffered ?? throw new InvalidOperationException("Buffered record expected.");
-                _buffered = null;
-                _hasBuffered = false;
-                return true;
-            }
-
-            if (_inner.MoveNext())
-            {
-                record = _inner.Current;
-                return true;
-            }
-
-            record = null!;
-            return false;
-        }
-
-        public bool TryPeekNext(out IDataRecord? record)
-        {
-            if (_hasBuffered)
-            {
-                record = _buffered;
-                return true;
-            }
-
-            if (_inner.MoveNext())
-            {
-                _buffered = _inner.Current;
-                _hasBuffered = true;
-                record = _buffered;
-                return true;
-            }
-
-            record = null;
-            return false;
-        }
-    }
-
-    private sealed class BufferedAsyncRecordEnumerator
-    {
-        private readonly IAsyncEnumerator<IDataRecord> _inner;
-        private bool _hasBuffered;
-        public IDataRecord? Current { get; private set; }
-
-        public BufferedAsyncRecordEnumerator(IAsyncEnumerator<IDataRecord> inner)
-            => _inner = inner;
-
-        public async Task<bool> TryGetNextAsync()
-        {
-            if (_hasBuffered)
-            {
-                _hasBuffered = false;
-                return true;
-            }
-
-            if (await _inner.MoveNextAsync())
-            {
-                Current = _inner.Current;
-                return true;
-            }
-
-            Current = null;
-            return false;
-        }
-
-        public async Task<bool> TryPeekNextAsync()
-        {
-            if (_hasBuffered)
-                return true;
-
-            if (await _inner.MoveNextAsync())
-            {
-                Current = _inner.Current;
-                _hasBuffered = true;
-                return true;
-            }
-
-            Current = null;
-            return false;
-        }
     }
 
     private static string ComposeBlobName(string? prefix, string fileName)
