@@ -25,51 +25,55 @@ public class ExportExcel : IExportExcel
         _registrationOptions = registrationOptions;
     }
 
-    public async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IEnumerable<IDataRecord> data,
+    public Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         string baseFileName,
         ExcelExportOptions options,
         TimeSpan? sasTtl = null,
         CancellationToken ct = default)
-    {
-        if (options.SplitIntoMultipleFiles)
-        {
-            return await ExecuteMultipleFileExportsAsync(data, columns, baseFileName, options, sasTtl, ct);
-        }
-
-        var result = await ExecuteSingleExportAsync(
-            baseFileName,
-            null,
+        => ExecuteAsyncCore(
             options,
-            sasTtl,
-            stream => _excelService.ExportAsync(data, columns, stream, options, ct),
-            ct,
-            appendFileIndex: false,
-            fileIndex: 1);
-        return new[] { result };
-    }
+            () => ExecuteMultipleFileExportsAsync(data, columns, baseFileName, options, sasTtl, ct),
+            () => ExecuteSingleExportAsync(
+                baseFileName,
+                null,
+                options,
+                sasTtl,
+                stream => _excelService.ExportAsync(data, columns, stream, options, ct),
+                ct,
+                appendFileIndex: false,
+                fileIndex: 1));
 
-    public async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
+    public Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         string baseFileName,
         ExcelExportOptions options,
         TimeSpan? sasTtl = null,
         CancellationToken ct = default)
+        => ExecuteAsyncCore(
+            options,
+            () => ExecuteMultipleFileExportsAsync(data, columns, baseFileName, options, sasTtl, ct),
+            () => ExecuteSingleExportAsync(
+                baseFileName,
+                null,
+                options,
+                sasTtl,
+                stream => _excelService.ExportAsync(data, columns, stream, options, ct),
+                ct,
+                appendFileIndex: false,
+                fileIndex: 1));
+
+    private async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsyncCore(
+        ExcelExportOptions options,
+        Func<Task<IReadOnlyList<BlobUploadResult>>> executeMultiFileAsync,
+        Func<Task<BlobUploadResult>> executeSingleAsync)
     {
         if (options.SplitIntoMultipleFiles)
         {
-            return await ExecuteMultipleFileExportsAsync(data, columns, baseFileName, options, sasTtl, ct);
+            return await executeMultiFileAsync();
         }
 
-        var result = await ExecuteSingleExportAsync(
-            baseFileName,
-            null,
-            options,
-            sasTtl,
-            stream => _excelService.ExportAsync(data, columns, stream, options, ct),
-            ct,
-            appendFileIndex: false,
-            fileIndex: 1);
+        var result = await executeSingleAsync();
         return new[] { result };
     }
 
@@ -83,34 +87,18 @@ public class ExportExcel : IExportExcel
     {
         using var enumerator = data.GetEnumerator();
         var bufferedEnumerator = new BufferedRecordEnumerator(enumerator);
-        var exports = new List<BlobUploadResult>();
-        var fileIndex = 1;
-        var (dataDate, created) = ResolveDates(options);
-        var baseGeneratedName = BuildBaseFileName(baseFileName, dataDate, created);
-
-        while (true)
-        {
-            var chunk = TakeNext(bufferedEnumerator, ExcelExportLimits.MaxDataRowsPerSheet, ct);
-            var exportOptions = CloneOptions(options, splitIntoMultipleSheets: false, splitIntoMultipleFiles: false);
-            var exportResponse = await ExportToTempFileAsync(
-                stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct),
-                ct);
-            var hasMore = bufferedEnumerator.TryPeekNext(out _);
-            var appendFileIndex = hasMore || fileIndex > 1;
-            var result = await UploadExportAsync(
-                exportResponse,
-                baseGeneratedName,
-                sasTtl,
-                appendFileIndex,
-                fileIndex,
-                ct);
-            exports.Add(result);
-            fileIndex++;
-            if (!hasMore)
-                break;
-        }
-
-        return exports;
+        var exportOptions = CloneOptions(options, splitIntoMultipleSheets: false, splitIntoMultipleFiles: false);
+        var baseGeneratedName = BuildBaseGeneratedName(baseFileName, options);
+        return await ExecuteMultipleFileExportsAsyncCore(
+            baseGeneratedName,
+            sasTtl,
+            () =>
+            {
+                var chunk = TakeNext(bufferedEnumerator, ExcelExportLimits.MaxDataRowsPerSheet, ct);
+                return ExportToTempFileAsync(stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct), ct);
+            },
+            () => Task.FromResult(bufferedEnumerator.TryPeekNext(out _)),
+            ct);
     }
 
     private async Task<IReadOnlyList<BlobUploadResult>> ExecuteMultipleFileExportsAsync(
@@ -123,19 +111,34 @@ public class ExportExcel : IExportExcel
     {
         await using var enumerator = data.GetAsyncEnumerator(ct);
         var bufferedEnumerator = new BufferedAsyncRecordEnumerator(enumerator);
+        var exportOptions = CloneOptions(options, splitIntoMultipleSheets: false, splitIntoMultipleFiles: false);
+        var baseGeneratedName = BuildBaseGeneratedName(baseFileName, options);
+        return await ExecuteMultipleFileExportsAsyncCore(
+            baseGeneratedName,
+            sasTtl,
+            () =>
+            {
+                var chunk = TakeNext(bufferedEnumerator, ExcelExportLimits.MaxDataRowsPerSheet, ct);
+                return ExportToTempFileAsync(stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct), ct);
+            },
+            () => bufferedEnumerator.TryPeekNextAsync(),
+            ct);
+    }
+
+    private async Task<IReadOnlyList<BlobUploadResult>> ExecuteMultipleFileExportsAsyncCore(
+        string baseGeneratedName,
+        TimeSpan? sasTtl,
+        Func<Task<FileStream>> exportChunkAsync,
+        Func<Task<bool>> hasMoreAsync,
+        CancellationToken ct)
+    {
         var exports = new List<BlobUploadResult>();
         var fileIndex = 1;
-        var (dataDate, created) = ResolveDates(options);
-        var baseGeneratedName = BuildBaseFileName(baseFileName, dataDate, created);
 
         while (true)
         {
-            var chunk = TakeNext(bufferedEnumerator, ExcelExportLimits.MaxDataRowsPerSheet, ct);
-            var exportOptions = CloneOptions(options, splitIntoMultipleSheets: false, splitIntoMultipleFiles: false);
-            var exportResponse = await ExportToTempFileAsync(
-                stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct),
-                ct);
-            var hasMore = await bufferedEnumerator.TryPeekNextAsync();
+            var exportResponse = await exportChunkAsync();
+            var hasMore = await hasMoreAsync();
             var appendFileIndex = hasMore || fileIndex > 1;
             var result = await UploadExportAsync(
                 exportResponse,
@@ -237,6 +240,12 @@ public class ExportExcel : IExportExcel
         var created = DateTime.UtcNow;
         var dataDate = options.DataDateUtc ?? created.Date;
         return (dataDate, created);
+    }
+
+    private string BuildBaseGeneratedName(string baseFileName, ExcelExportOptions options)
+    {
+        var (dataDate, created) = ResolveDates(options);
+        return BuildBaseFileName(baseFileName, dataDate, created);
     }
 
     private string BuildBaseFileName(string baseFileName, DateTime dataDate, DateTime created)
