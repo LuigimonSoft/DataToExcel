@@ -1,4 +1,5 @@
 using System.Data;
+using System.Linq;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
 using DataToExcel.Models;
@@ -86,7 +87,7 @@ public class ExcelExportClientTests
             blobPrefix: "exports/finance");
 
         // When
-        var result = await client.ExecuteAsync(records, columns, "Report", options);
+        var result = (await client.ExecuteAsync(records, columns, "Report", options)).Single();
 
         // Then
         containerMock.Verify(
@@ -137,7 +138,7 @@ public class ExcelExportClientTests
         var client = new DataToExcel.ExcelExportClient(containerMock.Object, TimeSpan.FromMinutes(5));
 
         // When
-        var result = await client.ExecuteAsync(records, columns, "Report", options);
+        var result = (await client.ExecuteAsync(records, columns, "Report", options)).Single();
 
         // Then
         containerMock.Verify(
@@ -187,7 +188,7 @@ public class ExcelExportClientTests
         var client = new DataToExcel.ExcelExportClient(containerMock.Object, TimeSpan.FromMinutes(5));
 
         // When
-        var result = await client.ExecuteAsync(ToAsyncEnumerable(records), columns, "Report", options);
+        var result = (await client.ExecuteAsync(ToAsyncEnumerable(records), columns, "Report", options)).Single();
 
         // Then
         blobMock.Verify(

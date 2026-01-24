@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Data;
 using System.Linq;
 using Azure.Storage.Blobs.Models;
@@ -27,7 +28,7 @@ public class ExportExcelTests
     {
         var (containerMock, useCase, records, columns, options) = BuildUseCase(prefix);
 
-        var result = await useCase.ExecuteAsync(records, columns, "Report", options);
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
 
         if (expectedPrefix is null)
         {
@@ -89,7 +90,7 @@ public class ExportExcelTests
             registrationOptions);
 
         // When
-        var result = await useCase.ExecuteAsync(records, columns, "Report", options);
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
 
         // Then
         containerMock.Verify(
@@ -146,7 +147,7 @@ public class ExportExcelTests
             registrationOptions);
 
         // When
-        var result = await useCase.ExecuteAsync(records, columns, "Report", options);
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
 
         // Then
         containerMock.Verify(
@@ -165,7 +166,7 @@ public class ExportExcelTests
         var (containerMock, useCase, syncRecords, columns, options) = BuildUseCase("async/reports");
         var records = ToAsyncEnumerable(syncRecords);
 
-        var result = await useCase.ExecuteAsync(records, columns, "Report", options);
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
 
         containerMock.Verify(
             c => c.GetBlobClient(It.Is<string>(name => name.StartsWith("async/reports/", StringComparison.Ordinal))),
@@ -220,7 +221,7 @@ public class ExportExcelTests
             repo,
             registrationOptions);
 
-        var result = await useCase.ExecuteAsync(records, columns, "Report", options);
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
 
         Assert.NotNull(result);
         captured.Position = 0;
@@ -283,7 +284,7 @@ public class ExportExcelTests
             repo,
             registrationOptions);
 
-        var result = await useCase.ExecuteAsync(records, columns, "Report", options);
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
 
         Assert.NotNull(result);
         captured.Position = 0;
@@ -298,6 +299,42 @@ public class ExportExcelTests
         {
             Assert.Equal(string.Empty, r.Elements<Cell>().First().InnerText);
         });
+    }
+
+    [Fact]
+    public async Task GivenSplitIntoMultipleFilesWhenRowLimitExceededThenUploadsMultipleFiles()
+    {
+        var records = new LargeRecordEnumerable(ExcelExportLimits.MaxDataRowsPerSheet + 1);
+        var columns = new List<ColumnDefinition> { new("Value", "Value", ColumnDataType.String) };
+        var options = new ExcelExportOptions
+        {
+            SplitIntoMultipleFiles = true,
+            SplitIntoMultipleSheets = true
+        };
+
+        var blobNames = new List<string>();
+        var repoMock = new Mock<DataToExcel.Repositories.Interfaces.IBlobStorageRepository>();
+        repoMock
+            .Setup(r => r.UploadExcelAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<TimeSpan?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Stream _, string blobName, TimeSpan? __, CancellationToken ___) =>
+            {
+                blobNames.Add(blobName);
+                return new RepositoryResponse<BlobUploadResult>(
+                    new BlobUploadResult("test", blobName, new Uri("https://example.com/blob"), new Uri("https://example.com/blob?sas=1"), 0));
+            });
+
+        var useCase = new ExportExcel(
+            new CountingExcelExportService(),
+            new FileNamingService(),
+            repoMock.Object,
+            new ExcelExportRegistrationOptions());
+
+        var results = await useCase.ExecuteAsync(records, columns, "Report", options);
+
+        Assert.Equal(2, results.Count);
+        Assert.Equal(2, blobNames.Count);
+        Assert.Contains(blobNames, name => name.Contains("_part01", StringComparison.Ordinal));
+        Assert.Contains(blobNames, name => name.Contains("_part02", StringComparison.Ordinal));
     }
 
     private static (Mock<IBlobContainerClient> containerMock,
@@ -380,6 +417,90 @@ public class ExportExcelTests
         while (reader.Read())
         {
             yield return reader;
+        }
+    }
+
+    private sealed class LargeRecordEnumerable : IEnumerable<IDataRecord>
+    {
+        private readonly int _count;
+        private readonly IDataRecord _record = new FakeDataRecord();
+
+        public LargeRecordEnumerable(int count)
+            => _count = count;
+
+        public IEnumerator<IDataRecord> GetEnumerator()
+        {
+            for (var i = 0; i < _count; i++)
+            {
+                yield return _record;
+            }
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class FakeDataRecord : IDataRecord
+    {
+        public int FieldCount => 1;
+        public object this[int i] => "Value";
+        public object this[string name] => "Value";
+
+        public bool GetBoolean(int i) => false;
+        public byte GetByte(int i) => 0;
+        public long GetBytes(int i, long fieldOffset, byte[]? buffer, int bufferoffset, int length) => 0;
+        public char GetChar(int i) => 'V';
+        public long GetChars(int i, long fieldoffset, char[]? buffer, int bufferoffset, int length) => 0;
+        public IDataReader GetData(int i) => throw new NotSupportedException();
+        public string GetDataTypeName(int i) => "string";
+        public DateTime GetDateTime(int i) => DateTime.MinValue;
+        public decimal GetDecimal(int i) => 0;
+        public double GetDouble(int i) => 0;
+        public Type GetFieldType(int i) => typeof(string);
+        public float GetFloat(int i) => 0;
+        public Guid GetGuid(int i) => Guid.Empty;
+        public short GetInt16(int i) => 0;
+        public int GetInt32(int i) => 0;
+        public long GetInt64(int i) => 0;
+        public string GetName(int i) => "Value";
+        public int GetOrdinal(string name) => 0;
+        public string GetString(int i) => "Value";
+        public object GetValue(int i) => "Value";
+        public int GetValues(object[] values)
+        {
+            values[0] = "Value";
+            return 1;
+        }
+        public bool IsDBNull(int i) => false;
+    }
+
+    private sealed class CountingExcelExportService : DataToExcel.Services.Interfaces.IExcelExportService
+    {
+        public Task<ServiceResponse<Stream>> ExportAsync(IEnumerable<IDataRecord> data,
+            IReadOnlyList<ColumnDefinition> columns,
+            Stream output,
+            ExcelExportOptions options,
+            CancellationToken ct = default)
+        {
+            foreach (var _ in data)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            return Task.FromResult(new ServiceResponse<Stream>(output) { IsSuccess = true });
+        }
+
+        public async Task<ServiceResponse<Stream>> ExportAsync(IAsyncEnumerable<IDataRecord> data,
+            IReadOnlyList<ColumnDefinition> columns,
+            Stream output,
+            ExcelExportOptions options,
+            CancellationToken ct = default)
+        {
+            await foreach (var _ in data.WithCancellation(ct))
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            return new ServiceResponse<Stream>(output) { IsSuccess = true };
         }
     }
 

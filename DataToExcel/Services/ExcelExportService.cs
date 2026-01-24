@@ -20,11 +20,13 @@ public class ExcelExportService : IExcelExportService
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default)
-        => ExportAsyncCore(output, options, (worksheetPart, styleMap)
+        => options.SplitIntoMultipleSheets
+            ? ExportMultipleSheetsAsync(data, columns, output, options, ct)
+            : ExportAsyncCore(output, options, (worksheetPart, styleMap)
             => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
                 writer =>
                 {
-                    WriteRows(writer, data, columns, styleMap, ct);
+                    WriteRows(writer, data, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
                     return Task.CompletedTask;
                 }), ct);
 
@@ -33,9 +35,126 @@ public class ExcelExportService : IExcelExportService
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct = default)
-        => ExportAsyncCore(output, options, (worksheetPart, styleMap)
+        => options.SplitIntoMultipleSheets
+            ? ExportMultipleSheetsAsync(data, columns, output, options, ct)
+            : ExportAsyncCore(output, options, (worksheetPart, styleMap)
             => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
-                writer => WriteRows(writer, data, columns, styleMap, ct)), ct);
+                writer => WriteRows(writer, data, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet)), ct);
+
+    private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (!output.CanSeek)
+                throw new ArgumentException("Stream must be seekable", nameof(output));
+
+            var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
+            if (!styleResponse.IsSuccess || styleResponse.Data is null)
+                return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
+            var stylesheet = styleResponse.Data;
+
+            using var document = SpreadsheetDocument.Create(output, SpreadsheetDocumentType.Workbook, true);
+            var workbookPart = document.AddWorkbookPart();
+            workbookPart.Workbook = new Workbook();
+            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
+            stylesPart.Stylesheet = stylesheet;
+            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+
+            using var enumerator = data.GetEnumerator();
+            var bufferedEnumerator = new BufferedRecordEnumerator(enumerator);
+            var sheetIndex = 1;
+            var hasMore = true;
+
+            do
+            {
+                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+                await WriteWorksheetAsync(worksheetPart, columns, options, styleMap, writer =>
+                {
+                    WriteRows(writer, bufferedEnumerator, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
+                    return Task.CompletedTask;
+                });
+
+                sheets.AppendChild(new Sheet
+                {
+                    Id = workbookPart.GetIdOfPart(worksheetPart),
+                    SheetId = (uint)sheetIndex,
+                    Name = ComposeSheetName(options.SheetName, sheetIndex)
+                });
+
+                sheetIndex++;
+                hasMore = bufferedEnumerator.TryPeekNext(out _);
+            } while (hasMore);
+
+            workbookPart.Workbook.Save();
+            await output.FlushAsync(ct);
+            return new ServiceResponse<Stream>(output) { IsSuccess = true };
+        }
+        catch (Exception ex)
+        {
+            return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = ex.Message };
+        }
+    }
+
+    private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IAsyncEnumerable<IDataRecord> data,
+        IReadOnlyList<ColumnDefinition> columns,
+        Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (!output.CanSeek)
+                throw new ArgumentException("Stream must be seekable", nameof(output));
+
+            var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
+            if (!styleResponse.IsSuccess || styleResponse.Data is null)
+                return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
+            var stylesheet = styleResponse.Data;
+
+            using var document = SpreadsheetDocument.Create(output, SpreadsheetDocumentType.Workbook, true);
+            var workbookPart = document.AddWorkbookPart();
+            workbookPart.Workbook = new Workbook();
+            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
+            stylesPart.Stylesheet = stylesheet;
+            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+
+            await using var enumerator = data.GetAsyncEnumerator(ct);
+            var bufferedEnumerator = new BufferedAsyncRecordEnumerator(enumerator);
+            var sheetIndex = 1;
+            var hasMore = true;
+
+            do
+            {
+                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+                await WriteWorksheetAsync(worksheetPart, columns, options, styleMap, async writer =>
+                {
+                    await WriteRows(writer, bufferedEnumerator, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
+                });
+
+                sheets.AppendChild(new Sheet
+                {
+                    Id = workbookPart.GetIdOfPart(worksheetPart),
+                    SheetId = (uint)sheetIndex,
+                    Name = ComposeSheetName(options.SheetName, sheetIndex)
+                });
+
+                sheetIndex++;
+                hasMore = await bufferedEnumerator.TryPeekNextAsync();
+            } while (hasMore);
+
+            workbookPart.Workbook.Save();
+            await output.FlushAsync(ct);
+            return new ServiceResponse<Stream>(output) { IsSuccess = true };
+        }
+        catch (Exception ex)
+        {
+            return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = ex.Message };
+        }
+    }
 
     private async Task<ServiceResponse<Stream>> ExportAsyncCore(Stream output,
         ExcelExportOptions options,
@@ -177,12 +296,45 @@ public class ExcelExportService : IExcelExportService
         IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct)
+        CancellationToken ct,
+        int maxRows)
     {
         var (groupIndexValue, groupField) = GetGroupInfo(columns);
         object? currentGroup = null;
+        var written = 0;
 
         foreach (var record in data)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (written >= maxRows)
+                throw new InvalidOperationException($"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
+
+            var dataRow = CreateDisconnectedRow(record, columns);
+            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
+            if (isGroupRow)
+                currentGroup = newGroupValue;
+
+            var row = CreateRow(groupField is not null, isGroupRow);
+            writer.WriteStartElement(row);
+            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
+            writer.WriteEndElement();
+            ClearDataRow(dataRow);
+            written++;
+        }
+    }
+
+    private static void WriteRows(OpenXmlWriter writer,
+        BufferedRecordEnumerator data,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct,
+        int maxRows)
+    {
+        var (groupIndexValue, groupField) = GetGroupInfo(columns);
+        object? currentGroup = null;
+        var written = 0;
+
+        while (written < maxRows && data.TryGetNext(out var record))
         {
             ct.ThrowIfCancellationRequested();
 
@@ -196,6 +348,7 @@ public class ExcelExportService : IExcelExportService
             WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
             writer.WriteEndElement();
             ClearDataRow(dataRow);
+            written++;
         }
     }
 
@@ -203,13 +356,18 @@ public class ExcelExportService : IExcelExportService
         IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct)
+        CancellationToken ct,
+        int maxRows)
     {
         var (groupIndexValue, groupField) = GetGroupInfo(columns);
         object? currentGroup = null;
+        var written = 0;
 
         await foreach (var record in data.WithCancellation(ct))
         {
+            if (written >= maxRows)
+                throw new InvalidOperationException($"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
+
             var dataRow = CreateDisconnectedRow(record, columns);
             var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
             if (isGroupRow)
@@ -220,6 +378,150 @@ public class ExcelExportService : IExcelExportService
             WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
             writer.WriteEndElement();
             ClearDataRow(dataRow);
+            written++;
+        }
+    }
+
+    private static async Task WriteRows(OpenXmlWriter writer,
+        BufferedAsyncRecordEnumerator data,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct,
+        int maxRows)
+    {
+        var (groupIndexValue, groupField) = GetGroupInfo(columns);
+        object? currentGroup = null;
+        var written = 0;
+
+        while (written < maxRows && await data.TryGetNextAsync())
+        {
+            ct.ThrowIfCancellationRequested();
+            var record = data.Current ?? throw new InvalidOperationException("Expected record instance.");
+
+            var dataRow = CreateDisconnectedRow(record, columns);
+            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
+            if (isGroupRow)
+                currentGroup = newGroupValue;
+
+            var row = CreateRow(groupField is not null, isGroupRow);
+            writer.WriteStartElement(row);
+            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
+            writer.WriteEndElement();
+            ClearDataRow(dataRow);
+            written++;
+        }
+    }
+
+    private static string ComposeSheetName(string sheetName, int sheetIndex)
+    {
+        var cleanedName = string.IsNullOrWhiteSpace(sheetName) ? "Sheet" : sheetName.Trim();
+        if (sheetIndex == 1)
+            return TrimSheetName(cleanedName, 0);
+
+        var suffix = $" ({sheetIndex})";
+        return $"{TrimSheetName(cleanedName, suffix.Length)}{suffix}";
+    }
+
+    private static string TrimSheetName(string sheetName, int suffixLength)
+    {
+        const int maxLength = 31;
+        var available = Math.Max(1, maxLength - suffixLength);
+        if (sheetName.Length <= available)
+            return sheetName;
+        return sheetName[..available];
+    }
+
+    private sealed class BufferedRecordEnumerator
+    {
+        private readonly IEnumerator<IDataRecord> _inner;
+        private bool _hasBuffered;
+        private IDataRecord? _buffered;
+
+        public BufferedRecordEnumerator(IEnumerator<IDataRecord> inner)
+            => _inner = inner;
+
+        public bool TryGetNext(out IDataRecord record)
+        {
+            if (_hasBuffered)
+            {
+                record = _buffered ?? throw new InvalidOperationException("Buffered record expected.");
+                _buffered = null;
+                _hasBuffered = false;
+                return true;
+            }
+
+            if (_inner.MoveNext())
+            {
+                record = _inner.Current;
+                return true;
+            }
+
+            record = null!;
+            return false;
+        }
+
+        public bool TryPeekNext(out IDataRecord? record)
+        {
+            if (_hasBuffered)
+            {
+                record = _buffered;
+                return true;
+            }
+
+            if (_inner.MoveNext())
+            {
+                _buffered = _inner.Current;
+                _hasBuffered = true;
+                record = _buffered;
+                return true;
+            }
+
+            record = null;
+            return false;
+        }
+    }
+
+    private sealed class BufferedAsyncRecordEnumerator
+    {
+        private readonly IAsyncEnumerator<IDataRecord> _inner;
+        private bool _hasBuffered;
+        public IDataRecord? Current { get; private set; }
+
+        public BufferedAsyncRecordEnumerator(IAsyncEnumerator<IDataRecord> inner)
+            => _inner = inner;
+
+        public async Task<bool> TryGetNextAsync()
+        {
+            if (_hasBuffered)
+            {
+                _hasBuffered = false;
+                return true;
+            }
+
+            if (await _inner.MoveNextAsync())
+            {
+                Current = _inner.Current;
+                return true;
+            }
+
+            Current = null;
+            return false;
+        }
+
+        public async Task<bool> TryPeekNextAsync()
+        {
+            if (_hasBuffered)
+                return true;
+
+            if (await _inner.MoveNextAsync())
+            {
+                Current = _inner.Current;
+                _hasBuffered = true;
+                return true;
+            }
+
+            Current = null;
+            return false;
         }
     }
 
