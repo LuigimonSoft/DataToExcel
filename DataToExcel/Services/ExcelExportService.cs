@@ -41,29 +41,13 @@ public class ExcelExportService : IExcelExportService
             => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
                 writer => WriteRows(writer, data, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet)), ct);
 
-    private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IEnumerable<IDataRecord> data,
+    private Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct)
-    {
-        try
+        => ExportMultipleSheetsAsyncCore(output, options, ct, async (workbookPart, sheets, styleMap) =>
         {
-            if (!output.CanSeek)
-                throw new ArgumentException("Stream must be seekable", nameof(output));
-
-            var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
-            if (!styleResponse.IsSuccess || styleResponse.Data is null)
-                return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
-            var stylesheet = styleResponse.Data;
-
-            using var document = SpreadsheetDocument.Create(output, SpreadsheetDocumentType.Workbook, true);
-            var workbookPart = document.AddWorkbookPart();
-            workbookPart.Workbook = new Workbook();
-            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
-            stylesPart.Stylesheet = stylesheet;
-            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
-
             using var enumerator = data.GetEnumerator();
             var bufferedEnumerator = new BufferedRecordEnumerator(enumerator);
             var sheetIndex = 1;
@@ -71,39 +55,44 @@ public class ExcelExportService : IExcelExportService
 
             do
             {
-                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
-                await WriteWorksheetAsync(worksheetPart, columns, options, styleMap, writer =>
+                await AddSheetAsync(workbookPart, sheets, sheetIndex, columns, options, styleMap, writer =>
                 {
                     WriteRows(writer, bufferedEnumerator, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
                     return Task.CompletedTask;
                 });
-
-                sheets.AppendChild(new Sheet
-                {
-                    Id = workbookPart.GetIdOfPart(worksheetPart),
-                    SheetId = (uint)sheetIndex,
-                    Name = ComposeSheetName(options.SheetName, sheetIndex)
-                });
-
                 sheetIndex++;
                 hasMore = bufferedEnumerator.TryPeekNext(out _);
             } while (hasMore);
+        });
 
-            workbookPart.Workbook.Save();
-            await output.FlushAsync(ct);
-            return new ServiceResponse<Stream>(output) { IsSuccess = true };
-        }
-        catch (Exception ex)
-        {
-            return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = ex.Message };
-        }
-    }
-
-    private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IAsyncEnumerable<IDataRecord> data,
+    private Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct)
+        => ExportMultipleSheetsAsyncCore(output, options, ct, async (workbookPart, sheets, styleMap) =>
+        {
+            await using var enumerator = data.GetAsyncEnumerator(ct);
+            var bufferedEnumerator = new BufferedAsyncRecordEnumerator(enumerator);
+            var sheetIndex = 1;
+            var hasMore = true;
+
+            do
+            {
+                await AddSheetAsync(workbookPart, sheets, sheetIndex, columns, options, styleMap, async writer =>
+                {
+                    await WriteRows(writer, bufferedEnumerator, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
+                });
+                sheetIndex++;
+                hasMore = await bufferedEnumerator.TryPeekNextAsync();
+            } while (hasMore);
+        });
+
+    private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsyncCore(
+        Stream output,
+        ExcelExportOptions options,
+        CancellationToken ct,
+        Func<WorkbookPart, Sheets, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeSheetsAsync)
     {
         try
         {
@@ -122,29 +111,7 @@ public class ExcelExportService : IExcelExportService
             stylesPart.Stylesheet = stylesheet;
             var sheets = workbookPart.Workbook.AppendChild(new Sheets());
 
-            await using var enumerator = data.GetAsyncEnumerator(ct);
-            var bufferedEnumerator = new BufferedAsyncRecordEnumerator(enumerator);
-            var sheetIndex = 1;
-            var hasMore = true;
-
-            do
-            {
-                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
-                await WriteWorksheetAsync(worksheetPart, columns, options, styleMap, async writer =>
-                {
-                    await WriteRows(writer, bufferedEnumerator, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
-                });
-
-                sheets.AppendChild(new Sheet
-                {
-                    Id = workbookPart.GetIdOfPart(worksheetPart),
-                    SheetId = (uint)sheetIndex,
-                    Name = ComposeSheetName(options.SheetName, sheetIndex)
-                });
-
-                sheetIndex++;
-                hasMore = await bufferedEnumerator.TryPeekNextAsync();
-            } while (hasMore);
+            await writeSheetsAsync(workbookPart, sheets, styleMap);
 
             workbookPart.Workbook.Save();
             await output.FlushAsync(ct);
@@ -299,28 +266,9 @@ public class ExcelExportService : IExcelExportService
         CancellationToken ct,
         int maxRows)
     {
-        var (groupIndexValue, groupField) = GetGroupInfo(columns);
-        object? currentGroup = null;
-        var written = 0;
-
-        foreach (var record in data)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (written >= maxRows)
-                throw new InvalidOperationException($"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
-
-            var dataRow = CreateDisconnectedRow(record, columns);
-            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
-            if (isGroupRow)
-                currentGroup = newGroupValue;
-
-            var row = CreateRow(groupField is not null, isGroupRow);
-            writer.WriteStartElement(row);
-            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
-            writer.WriteEndElement();
-            ClearDataRow(dataRow);
-            written++;
-        }
+        using var enumerator = data.GetEnumerator();
+        WriteRowsCore(writer, columns, styleMap, ct, maxRows, enforceLimit: true, moveNext: enumerator.MoveNext,
+            current: () => enumerator.Current);
     }
 
     private static void WriteRows(OpenXmlWriter writer,
@@ -330,26 +278,16 @@ public class ExcelExportService : IExcelExportService
         CancellationToken ct,
         int maxRows)
     {
-        var (groupIndexValue, groupField) = GetGroupInfo(columns);
-        object? currentGroup = null;
-        var written = 0;
-
-        while (written < maxRows && data.TryGetNext(out var record))
-        {
-            ct.ThrowIfCancellationRequested();
-
-            var dataRow = CreateDisconnectedRow(record, columns);
-            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
-            if (isGroupRow)
-                currentGroup = newGroupValue;
-
-            var row = CreateRow(groupField is not null, isGroupRow);
-            writer.WriteStartElement(row);
-            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
-            writer.WriteEndElement();
-            ClearDataRow(dataRow);
-            written++;
-        }
+        IDataRecord? currentRecord = null;
+        WriteRowsCore(writer, columns, styleMap, ct, maxRows, enforceLimit: false,
+            moveNext: () =>
+            {
+                if (!data.TryGetNext(out var record))
+                    return false;
+                currentRecord = record;
+                return true;
+            },
+            current: () => currentRecord);
     }
 
     private static async Task WriteRows(OpenXmlWriter writer,
@@ -359,27 +297,10 @@ public class ExcelExportService : IExcelExportService
         CancellationToken ct,
         int maxRows)
     {
-        var (groupIndexValue, groupField) = GetGroupInfo(columns);
-        object? currentGroup = null;
-        var written = 0;
-
-        await foreach (var record in data.WithCancellation(ct))
-        {
-            if (written >= maxRows)
-                throw new InvalidOperationException($"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
-
-            var dataRow = CreateDisconnectedRow(record, columns);
-            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
-            if (isGroupRow)
-                currentGroup = newGroupValue;
-
-            var row = CreateRow(groupField is not null, isGroupRow);
-            writer.WriteStartElement(row);
-            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
-            writer.WriteEndElement();
-            ClearDataRow(dataRow);
-            written++;
-        }
+        await using var enumerator = data.GetAsyncEnumerator(ct);
+        await WriteRowsCoreAsync(writer, columns, styleMap, ct, maxRows, enforceLimit: true,
+            moveNextAsync: () => enumerator.MoveNextAsync().AsTask(),
+            current: () => enumerator.Current);
     }
 
     private static async Task WriteRows(OpenXmlWriter writer,
@@ -389,27 +310,112 @@ public class ExcelExportService : IExcelExportService
         CancellationToken ct,
         int maxRows)
     {
+        await WriteRowsCoreAsync(writer, columns, styleMap, ct, maxRows, enforceLimit: false,
+            moveNextAsync: data.TryGetNextAsync,
+            current: () => data.Current);
+    }
+
+    private static async Task AddSheetAsync(WorkbookPart workbookPart,
+        Sheets sheets,
+        int sheetIndex,
+        IReadOnlyList<ColumnDefinition> columns,
+        ExcelExportOptions options,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        Func<OpenXmlWriter, Task> writeRowsAsync)
+    {
+        var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+        await WriteWorksheetAsync(worksheetPart, columns, options, styleMap, writeRowsAsync);
+
+        sheets.AppendChild(new Sheet
+        {
+            Id = workbookPart.GetIdOfPart(worksheetPart),
+            SheetId = (uint)sheetIndex,
+            Name = ComposeSheetName(options.SheetName, sheetIndex)
+        });
+    }
+
+    private static void WriteRowsCore(OpenXmlWriter writer,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct,
+        int maxRows,
+        bool enforceLimit,
+        Func<bool> moveNext,
+        Func<IDataRecord?> current)
+    {
         var (groupIndexValue, groupField) = GetGroupInfo(columns);
         object? currentGroup = null;
         var written = 0;
 
-        while (written < maxRows && await data.TryGetNextAsync())
+        while (moveNext())
         {
             ct.ThrowIfCancellationRequested();
-            var record = data.Current ?? throw new InvalidOperationException("Expected record instance.");
+            if (written >= maxRows)
+            {
+                if (enforceLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
+                }
+                break;
+            }
 
-            var dataRow = CreateDisconnectedRow(record, columns);
-            var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
-            if (isGroupRow)
-                currentGroup = newGroupValue;
-
-            var row = CreateRow(groupField is not null, isGroupRow);
-            writer.WriteStartElement(row);
-            WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
-            writer.WriteEndElement();
-            ClearDataRow(dataRow);
+            var record = current() ?? throw new InvalidOperationException("Expected record instance.");
+            WriteRow(writer, record, columns, styleMap, groupField, groupIndexValue, ref currentGroup);
             written++;
         }
+    }
+
+    private static async Task WriteRowsCoreAsync(OpenXmlWriter writer,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        CancellationToken ct,
+        int maxRows,
+        bool enforceLimit,
+        Func<Task<bool>> moveNextAsync,
+        Func<IDataRecord?> current)
+    {
+        var (groupIndexValue, groupField) = GetGroupInfo(columns);
+        object? currentGroup = null;
+        var written = 0;
+
+        while (await moveNextAsync())
+        {
+            ct.ThrowIfCancellationRequested();
+            if (written >= maxRows)
+            {
+                if (enforceLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
+                }
+                break;
+            }
+
+            var record = current() ?? throw new InvalidOperationException("Expected record instance.");
+            WriteRow(writer, record, columns, styleMap, groupField, groupIndexValue, ref currentGroup);
+            written++;
+        }
+    }
+
+    private static void WriteRow(OpenXmlWriter writer,
+        IDataRecord record,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        string? groupField,
+        int groupIndexValue,
+        ref object? currentGroup)
+    {
+        var dataRow = CreateDisconnectedRow(record, columns);
+        var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
+        if (isGroupRow)
+            currentGroup = newGroupValue;
+
+        var row = CreateRow(groupField is not null, isGroupRow);
+        writer.WriteStartElement(row);
+        WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
+        writer.WriteEndElement();
+        ClearDataRow(dataRow);
     }
 
     private static string ComposeSheetName(string sheetName, int sheetIndex)
