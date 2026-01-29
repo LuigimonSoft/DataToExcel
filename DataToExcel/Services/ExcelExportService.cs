@@ -235,10 +235,10 @@ public class ExcelExportService : IExcelExportService
         CancellationToken ct)
     {
         await using var enumerator = data.GetAsyncEnumerator(ct);
-        await WriteRowsCoreAsync(writer, columns, styleMap, maxRows, enforceLimit: true,
+        var context = new WriteRowsContext(columns, styleMap, maxRows, enforceLimit: true, ct);
+        await WriteRowsCoreAsync(writer, context,
             moveNextAsync: () => enumerator.MoveNextAsync().AsTask(),
-            current: () => enumerator.Current,
-            ct: ct);
+            current: () => enumerator.Current);
     }
 
     private static async Task WriteRows(OpenXmlWriter writer,
@@ -248,10 +248,10 @@ public class ExcelExportService : IExcelExportService
         int maxRows,
         CancellationToken ct)
     {
-        await WriteRowsCoreAsync(writer, columns, styleMap, maxRows, enforceLimit: false,
+        var context = new WriteRowsContext(columns, styleMap, maxRows, enforceLimit: false, ct);
+        await WriteRowsCoreAsync(writer, context,
             moveNextAsync: data.TryGetNextAsync,
-            current: () => data.Current,
-            ct: ct);
+            current: () => data.Current);
     }
 
     private static async Task AddSheetAsync(WorkbookPart workbookPart,
@@ -274,24 +274,20 @@ public class ExcelExportService : IExcelExportService
     }
 
     private static async Task WriteRowsCoreAsync(OpenXmlWriter writer,
-        IReadOnlyList<ColumnDefinition> columns,
-        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        int maxRows,
-        bool enforceLimit,
+        WriteRowsContext context,
         Func<Task<bool>> moveNextAsync,
-        Func<IDataRecord?> current,
-        CancellationToken ct)
+        Func<IDataRecord?> current)
     {
-        var (groupIndexValue, groupField) = GetGroupInfo(columns);
+        var (groupIndexValue, groupField) = GetGroupInfo(context.Columns);
         object? currentGroup = null;
         var written = 0;
 
         while (await moveNextAsync())
         {
-            ct.ThrowIfCancellationRequested();
-            if (written >= maxRows)
+            context.CancellationToken.ThrowIfCancellationRequested();
+            if (written >= context.MaxRows)
             {
-                if (enforceLimit)
+                if (context.EnforceLimit)
                 {
                     throw new InvalidOperationException(
                         $"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
@@ -300,10 +296,17 @@ public class ExcelExportService : IExcelExportService
             }
 
             var record = current() ?? throw new InvalidOperationException("Expected record instance.");
-            WriteRow(writer, record, columns, styleMap, groupField, groupIndexValue, ref currentGroup);
+            WriteRow(writer, record, context.Columns, context.StyleMap, groupField, groupIndexValue, ref currentGroup);
             written++;
         }
     }
+
+    private readonly record struct WriteRowsContext(
+        IReadOnlyList<ColumnDefinition> Columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> StyleMap,
+        int MaxRows,
+        bool EnforceLimit,
+        CancellationToken CancellationToken);
 
     private static void WriteRow(OpenXmlWriter writer,
         IDataRecord record,
