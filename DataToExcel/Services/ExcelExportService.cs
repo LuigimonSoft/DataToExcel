@@ -32,7 +32,7 @@ public class ExcelExportService : IExcelExportService
             ? ExportMultipleSheetsAsync(data, columns, output, options, ct)
             : ExportAsyncCore(output, options, (worksheetPart, styleMap)
             => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
-                writer => WriteRows(writer, data, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet)), ct);
+                writer => WriteRows(writer, data, columns, styleMap, ExcelExportLimits.MaxDataRowsPerSheet, ct)), ct);
 
     private Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
@@ -50,7 +50,7 @@ public class ExcelExportService : IExcelExportService
             {
                 await AddSheetAsync(workbookPart, sheets, sheetIndex, columns, options, styleMap, async writer =>
                 {
-                    await WriteRows(writer, bufferedEnumerator, columns, styleMap, ct, ExcelExportLimits.MaxDataRowsPerSheet);
+                    await WriteRows(writer, bufferedEnumerator, columns, styleMap, ExcelExportLimits.MaxDataRowsPerSheet, ct);
                 });
                 sheetIndex++;
                 hasMore = await bufferedEnumerator.TryPeekNextAsync();
@@ -232,25 +232,27 @@ public class ExcelExportService : IExcelExportService
         IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct,
-        int maxRows)
+        int maxRows,
+        CancellationToken ct)
     {
         await using var enumerator = data.GetAsyncEnumerator(ct);
-        await WriteRowsCoreAsync(writer, columns, styleMap, ct, maxRows, enforceLimit: true,
+        await WriteRowsCoreAsync(writer, columns, styleMap, maxRows, enforceLimit: true,
             moveNextAsync: () => enumerator.MoveNextAsync().AsTask(),
-            current: () => enumerator.Current);
+            current: () => enumerator.Current,
+            ct: ct);
     }
 
     private static async Task WriteRows(OpenXmlWriter writer,
         BufferedAsyncRecordEnumerator data,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct,
-        int maxRows)
+        int maxRows,
+        CancellationToken ct)
     {
-        await WriteRowsCoreAsync(writer, columns, styleMap, ct, maxRows, enforceLimit: false,
+        await WriteRowsCoreAsync(writer, columns, styleMap, maxRows, enforceLimit: false,
             moveNextAsync: data.TryGetNextAsync,
-            current: () => data.Current);
+            current: () => data.Current,
+            ct: ct);
     }
 
     private static async Task AddSheetAsync(WorkbookPart workbookPart,
@@ -275,11 +277,11 @@ public class ExcelExportService : IExcelExportService
     private static async Task WriteRowsCoreAsync(OpenXmlWriter writer,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        CancellationToken ct,
         int maxRows,
         bool enforceLimit,
         Func<Task<bool>> moveNextAsync,
-        Func<IDataRecord?> current)
+        Func<IDataRecord?> current,
+        CancellationToken ct)
     {
         var (groupIndexValue, groupField) = GetGroupInfo(columns);
         object? currentGroup = null;
