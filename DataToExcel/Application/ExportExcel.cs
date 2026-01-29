@@ -129,7 +129,7 @@ public class ExportExcel : IExportExcel
     {
         var (dataDate, created) = ResolveDates(request.Options);
         var fileNameBase = request.BaseGeneratedName ?? BuildBaseFileName(request.BaseFileName, dataDate, created);
-        var fileName = request.AppendFileIndex
+        var fileName = request.ShouldAppendFileIndex
             ? AppendFileIndex(fileNameBase, request.FileIndex)
             : fileNameBase;
         var blobName = ComposeBlobName(_registrationOptions.BlobPrefix, fileName);
@@ -159,7 +159,7 @@ public class ExportExcel : IExportExcel
         ExcelExportOptions Options,
         TimeSpan? SasTtl,
         Func<Stream, Task<ServiceResponse<Stream>>> Export,
-        bool AppendFileIndex,
+        bool ShouldAppendFileIndex,
         int FileIndex);
 
     private static async IAsyncEnumerable<IDataRecord> TakeNext(BufferedAsyncRecordEnumerator enumerator, int maxRows,
