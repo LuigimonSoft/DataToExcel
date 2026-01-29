@@ -39,7 +39,7 @@ public class ExcelExportService : IExcelExportService
         Stream output,
         ExcelExportOptions options,
         CancellationToken ct)
-        => ExportMultipleSheetsAsyncCore(output, options, ct, async (workbookPart, sheets, styleMap) =>
+        => ExportMultipleSheetsAsyncCore(output, options, async (workbookPart, sheets, styleMap) =>
         {
             await using var enumerator = data.GetAsyncEnumerator(ct);
             var bufferedEnumerator = new BufferedAsyncRecordEnumerator(enumerator);
@@ -55,13 +55,13 @@ public class ExcelExportService : IExcelExportService
                 sheetIndex++;
                 hasMore = await bufferedEnumerator.TryPeekNextAsync();
             } while (hasMore);
-        });
+        }, ct);
 
     private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsyncCore(
         Stream output,
         ExcelExportOptions options,
-        CancellationToken ct,
-        Func<WorkbookPart, Sheets, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeSheetsAsync)
+        Func<WorkbookPart, Sheets, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeSheetsAsync,
+        CancellationToken ct)
     {
         try
         {
