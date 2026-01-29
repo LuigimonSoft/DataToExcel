@@ -44,14 +44,15 @@ public class ExportExcel : IExportExcel
             options,
             () => ExecuteMultipleFileExportsAsync(data, columns, baseFileName, options, sasTtl, ct),
             () => ExecuteSingleExportAsync(
-                baseFileName,
-                null,
-                options,
-                sasTtl,
-                stream => _excelService.ExportAsync(data, columns, stream, options, ct),
-                appendFileIndex: false,
-                fileIndex: 1,
-                ct: ct));
+                new SingleExportRequest(
+                    baseFileName,
+                    null,
+                    options,
+                    sasTtl,
+                    stream => _excelService.ExportAsync(data, columns, stream, options, ct),
+                    false,
+                    1),
+                ct));
 
     private static async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsyncCore(
         ExcelExportOptions options,
@@ -123,19 +124,13 @@ public class ExportExcel : IExportExcel
     }
 
     private async Task<BlobUploadResult> ExecuteSingleExportAsync(
-        string baseFileName,
-        string? baseGeneratedName,
-        ExcelExportOptions options,
-        TimeSpan? sasTtl,
-        Func<Stream, Task<ServiceResponse<Stream>>> export,
-        bool appendFileIndex,
-        int fileIndex,
+        SingleExportRequest request,
         CancellationToken ct)
     {
-        var (dataDate, created) = ResolveDates(options);
-        var fileNameBase = baseGeneratedName ?? BuildBaseFileName(baseFileName, dataDate, created);
-        var fileName = appendFileIndex
-            ? AppendFileIndex(fileNameBase, fileIndex)
+        var (dataDate, created) = ResolveDates(request.Options);
+        var fileNameBase = request.BaseGeneratedName ?? BuildBaseFileName(request.BaseFileName, dataDate, created);
+        var fileName = request.AppendFileIndex
+            ? AppendFileIndex(fileNameBase, request.FileIndex)
             : fileNameBase;
         var blobName = ComposeBlobName(_registrationOptions.BlobPrefix, fileName);
 
@@ -144,11 +139,11 @@ public class ExportExcel : IExportExcel
         {
             await using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.SequentialScan))
             {
-                var exportResponse = await export(fs);
+                var exportResponse = await request.Export(fs);
                 if (!exportResponse.IsSuccess)
                     throw new InvalidOperationException(exportResponse.ErrorMessage ?? "Excel export failed");
                 fs.Position = 0;
-                return await UploadExportAsync(fs, blobName, sasTtl, ct);
+                return await UploadExportAsync(fs, blobName, request.SasTtl, ct);
             }
         }
         finally
@@ -157,6 +152,15 @@ public class ExportExcel : IExportExcel
                 File.Delete(tempFile);
         }
     }
+
+    private sealed record SingleExportRequest(
+        string BaseFileName,
+        string? BaseGeneratedName,
+        ExcelExportOptions Options,
+        TimeSpan? SasTtl,
+        Func<Stream, Task<ServiceResponse<Stream>>> Export,
+        bool AppendFileIndex,
+        int FileIndex);
 
     private static async IAsyncEnumerable<IDataRecord> TakeNext(BufferedAsyncRecordEnumerator enumerator, int maxRows,
         [EnumeratorCancellation] CancellationToken ct)
