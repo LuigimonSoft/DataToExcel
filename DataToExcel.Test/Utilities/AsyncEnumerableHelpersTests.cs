@@ -6,6 +6,8 @@ namespace DataToExcel.Test.Utilities;
 
 public class AsyncEnumerableHelpersTests
 {
+    private static readonly string[] ExpectedValues = { "A", "B" };
+
     [Fact]
     public async Task ToAsyncEnumerableReturnsItemsInOrder()
     {
@@ -21,7 +23,7 @@ public class AsyncEnumerableHelpersTests
             results.Add(record.GetString(0));
         }
 
-        Assert.Equal(new[] { "A", "B" }, results);
+        Assert.Equal(ExpectedValues, results);
     }
 
     [Fact]
