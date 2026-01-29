@@ -49,11 +49,11 @@ public class ExportExcel : IExportExcel
                 options,
                 sasTtl,
                 stream => _excelService.ExportAsync(data, columns, stream, options, ct),
-                ct,
                 appendFileIndex: false,
-                fileIndex: 1));
+                fileIndex: 1,
+                ct: ct));
 
-    private async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsyncCore(
+    private static async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsyncCore(
         ExcelExportOptions options,
         Func<Task<IReadOnlyList<BlobUploadResult>>> executeMultiFileAsync,
         Func<Task<BlobUploadResult>> executeSingleAsync)
@@ -128,9 +128,9 @@ public class ExportExcel : IExportExcel
         ExcelExportOptions options,
         TimeSpan? sasTtl,
         Func<Stream, Task<ServiceResponse<Stream>>> export,
-        CancellationToken ct,
         bool appendFileIndex,
-        int fileIndex)
+        int fileIndex,
+        CancellationToken ct)
     {
         var (dataDate, created) = ResolveDates(options);
         var fileNameBase = baseGeneratedName ?? BuildBaseFileName(baseFileName, dataDate, created);
