@@ -1,4 +1,5 @@
 using System.Data;
+using System.Linq;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
 using DataToExcel;
@@ -47,7 +48,7 @@ public class ExcelExportClientTests
         var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
 
         // When
-        var result = await client.ExecuteAsync(records, columns, "Report", new ExcelExportOptions());
+        var result = (await client.ExecuteAsync(records, columns, "Report", new ExcelExportOptions())).Single();
 
         // Then
         blobMock.Verify(

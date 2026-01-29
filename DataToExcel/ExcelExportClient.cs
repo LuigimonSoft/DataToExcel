@@ -76,7 +76,7 @@ public class ExcelExportClient : IExportExcel
         return new ExportExcel(export, naming, repo, options);
     }
 
-    public async Task<BlobUploadResult> ExecuteAsync(IEnumerable<IDataRecord> data,
+    public async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         string baseFileName,
         ExcelExportOptions options,
@@ -84,7 +84,7 @@ public class ExcelExportClient : IExportExcel
         CancellationToken ct = default) =>
         await _inner.ExecuteAsync(data, columns, baseFileName, options, sasTtl, ct);
 
-    public async Task<BlobUploadResult> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
+    public async Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         string baseFileName,
         ExcelExportOptions options,

@@ -26,7 +26,7 @@ services.AddExcelExport(options =>
 var provider = services.BuildServiceProvider();
 var exporter = provider.GetRequiredService<IExportExcel>();
 
-var result = await exporter.ExecuteAsync(
+var results = await exporter.ExecuteAsync(
     data: records,
     columns: columns,
     baseFileName: "Sales",
@@ -35,7 +35,9 @@ var result = await exporter.ExecuteAsync(
         SheetName = "Sales",
         DataDateUtc = new DateTime(2025, 8, 1),
         FreezeHeader = true,
-        AutoFilter = true
+        AutoFilter = true,
+        SplitIntoMultipleSheets = true,
+        SplitIntoMultipleFiles = false
     },
     ct: CancellationToken.None);
 ```
@@ -69,7 +71,7 @@ var client = new ExcelExportClient("<SecureConnectionString>", "reports", blobPr
 // Or using a container URI and optional credential (for RBAC/AAD)
 var client = new ExcelExportClient(new Uri("https://account.blob.core.windows.net/reports"), blobPrefix: "exports/finance");
 
-var result = await client.ExecuteAsync(
+var results = await client.ExecuteAsync(
     data: records,
     columns: columns,
     baseFileName: "Sales",
@@ -77,7 +79,7 @@ var result = await client.ExecuteAsync(
     ct: CancellationToken.None);
 ```
 
-The `ExecuteAsync` method returns a `BlobUploadResult` with the blob URI, SAS URI, and uploaded size.
+The `ExecuteAsync` method returns a list of `BlobUploadResult` entries (one per generated file) containing the blob URI, SAS URI, and uploaded size.
 
 ## NuGet requirements
 - DocumentFormat.OpenXml
@@ -86,7 +88,7 @@ The `ExecuteAsync` method returns a `BlobUploadResult` with the blob URI, SAS UR
 
 ## Limitations
 - Maximum of 1,048,576 rows per worksheet
-- `IAsyncEnumerable<IDataRecord>` and worksheet splitting are not yet implemented
+- Use `SplitIntoMultipleSheets` to distribute rows across worksheets, or `SplitIntoMultipleFiles` to generate multiple files when row counts exceed the worksheet limit (multiple files take priority).
 
 ## Performance and security notes
 - Uses `OpenXmlWriter` with a temporary `FileStream` to keep memory usage low

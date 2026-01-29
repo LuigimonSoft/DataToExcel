@@ -137,6 +137,52 @@ public class ExcelExportServiceTests
     }
 
     [Fact]
+    public async Task GivenSplitIntoMultipleSheetsWhenExportAsyncThenOptionsAreHonored()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Rows.Add("Alice");
+        var records = ToAsyncEnumerable(table);
+
+        var columns = new List<ColumnDefinition>
+        {
+            new("Name", "Name", ColumnDataType.String, Width: 20, Hidden: true)
+        };
+        var service = new ExcelExportService(new ExcelStyleProvider());
+        using var ms = new MemoryStream();
+
+        var response = await service.ExportAsync(records, columns, ms, new ExcelExportOptions
+        {
+            SplitIntoMultipleSheets = true,
+            FreezeHeader = false,
+            AutoFilter = false
+        });
+
+        Assert.True(response.IsSuccess);
+        ms.Position = 0;
+        using var doc = SpreadsheetDocument.Open(ms, false);
+        var sheet = doc.WorkbookPart!.WorksheetParts.First().Worksheet;
+        Assert.Null(sheet.SheetViews);
+        Assert.Null(sheet.Elements<AutoFilter>().FirstOrDefault());
+        Assert.NotNull(sheet.Elements<Columns>().FirstOrDefault());
+    }
+
+    [Fact]
+    public void GivenLongSheetNameWhenComposeSheetNameThenTrimsAndSuffixes()
+    {
+        var method = typeof(ExcelExportService).GetMethod("ComposeSheetName",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var longName = new string('A', 40);
+        var result = method!.Invoke(null, new object?[] { longName, 2 }) as string;
+
+        Assert.NotNull(result);
+        Assert.EndsWith(" (2)", result, StringComparison.Ordinal);
+        Assert.True(result!.Length <= 31);
+    }
+
+    [Fact]
     public async Task GivenHiddenColumnWhenExportAsyncThenColumnShouldBeHidden()
     {
         var table = new DataTable();

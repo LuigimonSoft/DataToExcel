@@ -65,7 +65,7 @@ public class IntegrationTests
         var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
 
         // When
-        var result = await useCase.ExecuteAsync(records, columns, "Report", new ExcelExportOptions());
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", new ExcelExportOptions())).Single();
 
         // Then
         blobMock.Verify(
@@ -124,7 +124,7 @@ public class IntegrationTests
             new("Amount", "Amount", ColumnDataType.Number)
         };
 
-        var result = await useCase.ExecuteAsync(records, columns, "Report", new ExcelExportOptions());
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", new ExcelExportOptions())).Single();
 
         Assert.NotNull(result);
         captured.Position = 0;
@@ -191,7 +191,7 @@ public class IntegrationTests
             new("Amount", "Amount", ColumnDataType.Number)
         };
 
-        var result = await useCase.ExecuteAsync(records, columns, "Report", new ExcelExportOptions());
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", new ExcelExportOptions())).Single();
 
         Assert.NotNull(result);
         captured.Position = 0;
