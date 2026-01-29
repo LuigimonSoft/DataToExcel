@@ -86,7 +86,7 @@ public class ExportExcel : IExportExcel
             () =>
             {
                 var chunk = TakeNext(bufferedEnumerator, ExcelExportLimits.MaxDataRowsPerSheet, ct);
-                return ExportToTempFileAsync(stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct), ct);
+                return ExportToTempFileAsync(stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct));
             },
             () => bufferedEnumerator.TryPeekNextAsync(),
             ct);
@@ -216,8 +216,7 @@ public class ExportExcel : IExportExcel
     }
 
     private static async Task<FileStream> ExportToTempFileAsync(
-        Func<Stream, Task<ServiceResponse<Stream>>> export,
-        CancellationToken ct)
+        Func<Stream, Task<ServiceResponse<Stream>>> export)
     {
         var tempFile = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         var fs = new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096, FileOptions.SequentialScan);
