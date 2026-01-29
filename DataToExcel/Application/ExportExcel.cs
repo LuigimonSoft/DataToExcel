@@ -190,7 +190,7 @@ public class ExportExcel : IExportExcel
         return $"{name}_part{fileIndex:D2}{extension}";
     }
 
-    private (DateTime dataDate, DateTime created) ResolveDates(ExcelExportOptions options)
+    private static (DateTime dataDate, DateTime created) ResolveDates(ExcelExportOptions options)
     {
         var created = DateTime.UtcNow;
         var dataDate = options.DataDateUtc ?? created.Date;
@@ -211,7 +211,7 @@ public class ExportExcel : IExportExcel
         return nameResponse.Data;
     }
 
-    private async Task<FileStream> ExportToTempFileAsync(
+    private static async Task<FileStream> ExportToTempFileAsync(
         Func<Stream, Task<ServiceResponse<Stream>>> export,
         CancellationToken ct)
     {
