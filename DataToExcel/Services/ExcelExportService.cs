@@ -235,7 +235,7 @@ public class ExcelExportService : IExcelExportService
         CancellationToken ct)
     {
         await using var enumerator = data.GetAsyncEnumerator(ct);
-        var context = new WriteRowsContext(columns, styleMap, maxRows, enforceLimit: true, ct);
+        var context = new WriteRowsContext(columns, styleMap, maxRows, EnforceLimit: true, ct);
         await WriteRowsCoreAsync(writer, context,
             moveNextAsync: () => enumerator.MoveNextAsync().AsTask(),
             current: () => enumerator.Current);
@@ -248,7 +248,7 @@ public class ExcelExportService : IExcelExportService
         int maxRows,
         CancellationToken ct)
     {
-        var context = new WriteRowsContext(columns, styleMap, maxRows, enforceLimit: false, ct);
+        var context = new WriteRowsContext(columns, styleMap, maxRows, EnforceLimit: false, ct);
         await WriteRowsCoreAsync(writer, context,
             moveNextAsync: data.TryGetNextAsync,
             current: () => data.Current);
