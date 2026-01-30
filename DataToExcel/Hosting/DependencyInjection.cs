@@ -40,6 +40,16 @@ public static class DependencyInjection
     public static IServiceCollection AddExcelExport(this IServiceCollection services, IConfiguration configuration)
     {
         var bound = configuration.Get<ExcelExportRegistrationOptions>() ?? new ExcelExportRegistrationOptions();
+        if (bound.ConnectionString is null && bound.ContainerUri is null)
+        {
+            var connectionString = configuration.GetConnectionString("AzureBlobStorage");
+            var containerName = configuration.GetSection("StorageAccounts").GetSection("DefaultContainerName")["ContainerName"];
+            var prefix = configuration.GetSection("DataToExcel")["BlobPrefix"];
+
+            bound.ConnectionString = connectionString;
+            bound.ContainerName = containerName;
+            bound.BlobPrefix = prefix;
+        }
         return services.AddExcelExport(opts =>
         {
             opts.ContainerName = bound.ContainerName;

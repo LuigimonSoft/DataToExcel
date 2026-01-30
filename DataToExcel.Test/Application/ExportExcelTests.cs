@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Azure.Storage.Blobs.Models;
 using Azure.Storage.Sas;
@@ -420,6 +421,7 @@ public class ExportExcelTests
         }
     }
 
+    [ExcludeFromCodeCoverage]
     private sealed class LargeRecordEnumerable : IEnumerable<IDataRecord>
     {
         private readonly int _count;
@@ -438,7 +440,7 @@ public class ExportExcelTests
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
-
+    [ExcludeFromCodeCoverage]
     private sealed class FakeDataRecord : IDataRecord
     {
         public int FieldCount => 1;
@@ -472,7 +474,7 @@ public class ExportExcelTests
         }
         public bool IsDBNull(int i) => false;
     }
-
+    [ExcludeFromCodeCoverage]
     private sealed class CountingExcelExportService : DataToExcel.Services.Interfaces.IExcelExportService
     {
         public Task<ServiceResponse<Stream>> ExportAsync(IEnumerable<IDataRecord> data,
@@ -503,7 +505,7 @@ public class ExportExcelTests
             return new ServiceResponse<Stream>(output) { IsSuccess = true };
         }
     }
-
+    [ExcludeFromCodeCoverage]
     private sealed class ForwardOnlyAsyncRecords : IAsyncEnumerable<IDataRecord>, IAsyncEnumerator<IDataRecord>
     {
         private readonly DataTable _table;
