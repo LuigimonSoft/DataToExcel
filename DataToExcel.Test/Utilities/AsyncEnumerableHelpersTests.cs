@@ -1,5 +1,6 @@
 using System.Data;
 using DataToExcel.Utilities;
+using System.Diagnostics.CodeAnalysis;
 using Xunit;
 
 namespace DataToExcel.Test.Utilities;
@@ -67,6 +68,7 @@ public class AsyncEnumerableHelpersTests
         Assert.Null(buffered.Current);
     }
 
+    [ExcludeFromCodeCoverage]
     private sealed class FakeDataRecord : IDataRecord
     {
         private readonly string _value;
