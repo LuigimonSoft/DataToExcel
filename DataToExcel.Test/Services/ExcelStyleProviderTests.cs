@@ -81,4 +81,34 @@ public class ExcelStyleProviderTests
         var headerFont = stylesheet.Fonts!.Elements<Font>().ElementAt(1);
         Assert.Null(headerFont.GetFirstChild<Color>());
     }
+
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("   ", "\t")]
+    [InlineData("", "NOT_VALID")]
+    [InlineData("BAD", "")]
+    public void GivenBlankOrMixedInvalidHeaderColorsWhenBuildStylesheetThenHeaderStyleShouldFallbackToDefaults(
+        string? backgroundColor,
+        string? textColor)
+    {
+        // Given
+        var provider = new ExcelStyleProvider();
+
+        // When
+        var response = provider.BuildStylesheet(new ExcelExportOptions
+        {
+            HeaderBackgroundColorHex = backgroundColor,
+            HeaderTextColorHex = textColor
+        }, out _);
+
+        // Then
+        Assert.True(response.IsSuccess);
+        var stylesheet = Assert.IsType<Stylesheet>(response.Data);
+
+        var headerFormat = stylesheet.CellFormats!.Elements<CellFormat>().ElementAt(1);
+        Assert.False(headerFormat.ApplyFill?.Value ?? false);
+
+        var headerFont = stylesheet.Fonts!.Elements<Font>().ElementAt(1);
+        Assert.Null(headerFont.GetFirstChild<Color>());
+    }
 }
