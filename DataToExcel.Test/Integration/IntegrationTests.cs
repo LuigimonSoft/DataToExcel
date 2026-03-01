@@ -208,6 +208,171 @@ public class IntegrationTests
         });
     }
 
+    [Theory]
+    [InlineData("", "")]
+    [InlineData("   ", "\t")]
+    [InlineData("", "NOT_VALID")]
+    [InlineData("BAD", "")]
+    public async Task GivenBlankOrMixedInvalidHeaderColorsWhenUseCaseExecutesViaDIThenHeaderStyleShouldFallbackToDefaults(
+        string? backgroundColor,
+        string? textColor)
+    {
+        var services = new ServiceCollection();
+        services.AddExcelExport(o =>
+        {
+            o.ConnectionString = "UseDevelopmentStorage=true";
+            o.ContainerName = "test";
+        });
+
+        var containerMock = new Mock<IBlobContainerClient>();
+        var blobMock = new Mock<IBlobClient>();
+        var captured = new MemoryStream();
+
+        containerMock.Setup(c => c.Name).Returns("test");
+        containerMock
+            .Setup(c => c.CreateIfNotExistsAsync(PublicAccessType.None, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        containerMock
+            .Setup(c => c.GetBlobClient(It.IsAny<string>()))
+            .Returns(blobMock.Object);
+
+        blobMock.Setup(b => b.CanGenerateSasUri).Returns(true);
+        blobMock.Setup(b => b.Uri).Returns(new Uri("https://example.com/blob"));
+        blobMock
+            .Setup(b => b.GenerateSasUri(It.IsAny<BlobSasBuilder>()))
+            .Returns(new Uri("https://example.com/blob?sas=1"));
+        blobMock
+            .Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Stream, BlobUploadOptions, CancellationToken>((stream, _, _) =>
+            {
+                stream.Position = 0;
+                stream.CopyTo(captured);
+            })
+            .Returns(Task.CompletedTask);
+
+        services.AddSingleton<IBlobStorageRepository>(sp =>
+            new AzureBlobStorageRepository(containerMock.Object, TimeSpan.FromMinutes(5)));
+
+        var provider = services.BuildServiceProvider();
+        var useCase = provider.GetRequiredService<IExportExcel>();
+
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Rows.Add("Alice");
+        var records = ToRecords(table);
+        var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
+
+        var options = new ExcelExportOptions
+        {
+            HeaderBackgroundColorHex = backgroundColor,
+            HeaderTextColorHex = textColor
+        };
+
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
+
+        Assert.NotNull(result);
+        captured.Position = 0;
+        using var doc = SpreadsheetDocument.Open(captured, false);
+
+        var sheet = doc.WorkbookPart!.WorksheetParts.First().Worksheet;
+        var headerCell = sheet.GetFirstChild<SheetData>()!
+            .Elements<Row>()
+            .First()
+            .Elements<Cell>()
+            .First();
+
+        var stylesheet = doc.WorkbookPart.WorkbookStylesPart!.Stylesheet;
+        var headerFormat = stylesheet.CellFormats!
+            .Elements<CellFormat>()
+            .ElementAt((int)(headerCell.StyleIndex?.Value ?? 0u));
+        Assert.False(headerFormat.ApplyFill?.Value ?? false);
+
+        var headerFont = stylesheet.Fonts!.Elements<Font>().ElementAt((int)headerFormat.FontId!.Value);
+        Assert.Null(headerFont.GetFirstChild<Color>());
+    }
+
+    [Fact]
+    public async Task GivenHeaderColorsWhenUseCaseExecutesViaDIThenHeaderStyleShouldBeAppliedInGeneratedExcel()
+    {
+        var services = new ServiceCollection();
+        services.AddExcelExport(o =>
+        {
+            o.ConnectionString = "UseDevelopmentStorage=true";
+            o.ContainerName = "test";
+        });
+
+        var containerMock = new Mock<IBlobContainerClient>();
+        var blobMock = new Mock<IBlobClient>();
+        var captured = new MemoryStream();
+
+        containerMock.Setup(c => c.Name).Returns("test");
+        containerMock
+            .Setup(c => c.CreateIfNotExistsAsync(PublicAccessType.None, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        containerMock
+            .Setup(c => c.GetBlobClient(It.IsAny<string>()))
+            .Returns(blobMock.Object);
+
+        blobMock.Setup(b => b.CanGenerateSasUri).Returns(true);
+        blobMock.Setup(b => b.Uri).Returns(new Uri("https://example.com/blob"));
+        blobMock
+            .Setup(b => b.GenerateSasUri(It.IsAny<BlobSasBuilder>()))
+            .Returns(new Uri("https://example.com/blob?sas=1"));
+        blobMock
+            .Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Stream, BlobUploadOptions, CancellationToken>((stream, _, _) =>
+            {
+                stream.Position = 0;
+                stream.CopyTo(captured);
+            })
+            .Returns(Task.CompletedTask);
+
+        services.AddSingleton<IBlobStorageRepository>(sp =>
+            new AzureBlobStorageRepository(containerMock.Object, TimeSpan.FromMinutes(5)));
+
+        var provider = services.BuildServiceProvider();
+        var useCase = provider.GetRequiredService<IExportExcel>();
+
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Rows.Add("Alice");
+        var records = ToRecords(table);
+        var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
+
+        var options = new ExcelExportOptions
+        {
+            HeaderBackgroundColorHex = "#1F4E78",
+            HeaderTextColorHex = "#FFFFFF"
+        };
+
+        var result = (await useCase.ExecuteAsync(records, columns, "Report", options)).Single();
+
+        Assert.NotNull(result);
+        captured.Position = 0;
+        using var doc = SpreadsheetDocument.Open(captured, false);
+
+        var sheet = doc.WorkbookPart!.WorksheetParts.First().Worksheet;
+        var headerCell = sheet.GetFirstChild<SheetData>()!
+            .Elements<Row>()
+            .First()
+            .Elements<Cell>()
+            .First();
+
+        var stylesheet = doc.WorkbookPart.WorkbookStylesPart!.Stylesheet;
+        var headerFormat = stylesheet.CellFormats!
+            .Elements<CellFormat>()
+            .ElementAt((int)(headerCell.StyleIndex?.Value ?? 0u));
+        Assert.True(headerFormat.ApplyFill?.Value ?? false);
+
+        var headerFill = stylesheet.Fills!.Elements<Fill>().ElementAt((int)headerFormat.FillId!.Value);
+        var patternFill = Assert.IsType<PatternFill>(headerFill.FirstChild);
+        Assert.Equal(PatternValues.Solid, patternFill.PatternType!.Value);
+        Assert.Equal("1F4E78", patternFill.ForegroundColor!.Rgb!.Value);
+
+        var headerFont = stylesheet.Fonts!.Elements<Font>().ElementAt((int)headerFormat.FontId!.Value);
+        Assert.Equal("FFFFFF", headerFont.GetFirstChild<Color>()!.Rgb!.Value);
+    }
+
     private static DataTable BuildGroupedTable()
     {
         var table = new DataTable();
