@@ -1,20 +1,27 @@
 using DataToExcel.Models;
 using DataToExcel.Services.Interfaces;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Spreadsheet;
 
 namespace DataToExcel.Services;
 
 public class ExcelStyleProvider : IExcelStyleProvider
 {
-    public ServiceResponse<Stylesheet> BuildStylesheet(out IReadOnlyDictionary<PredefinedStyle, uint> styleIndexMap)
+    public ServiceResponse<Stylesheet> BuildStylesheet(ExcelExportOptions options, out IReadOnlyDictionary<PredefinedStyle, uint> styleIndexMap)
     {
         try
         {
             var fonts = new Fonts();
             fonts.AppendChild(new Font());
-            var boldFont = new Font();
-            boldFont.AppendChild(new Bold());
-            fonts.AppendChild(boldFont);
+
+            var headerFont = new Font();
+            headerFont.AppendChild(new Bold());
+            var headerTextColor = NormalizeHexColor(options.HeaderTextColorHex);
+            if (headerTextColor is not null)
+            {
+                headerFont.AppendChild(new Color { Rgb = headerTextColor });
+            }
+            fonts.AppendChild(headerFont);
 
             var fills = new Fills();
             var fillNone = new Fill();
@@ -23,6 +30,21 @@ public class ExcelStyleProvider : IExcelStyleProvider
             var fillGray = new Fill();
             fillGray.AppendChild(new PatternFill { PatternType = PatternValues.Gray125 });
             fills.AppendChild(fillGray);
+
+            uint headerFillId = 0;
+            var headerBackgroundColor = NormalizeHexColor(options.HeaderBackgroundColorHex);
+            if (headerBackgroundColor is not null)
+            {
+                var headerFill = new Fill();
+                headerFill.AppendChild(new PatternFill
+                {
+                    PatternType = PatternValues.Solid,
+                    ForegroundColor = new ForegroundColor { Rgb = headerBackgroundColor },
+                    BackgroundColor = new BackgroundColor { Indexed = 64 }
+                });
+                fills.AppendChild(headerFill);
+                headerFillId = (uint)fills.Count() - 1;
+            }
 
             var borders = new Borders();
             borders.AppendChild(new Border());
@@ -34,7 +56,7 @@ public class ExcelStyleProvider : IExcelStyleProvider
             var cellFormats = new List<CellFormat>
             {
                 new(),                                // 0 default
-                new() { FontId = 1, ApplyFont = true } // 1 header
+                new() { FontId = 1, FillId = headerFillId, ApplyFont = true, ApplyFill = headerBackgroundColor is not null } // 1 header
             };
 
             // number
@@ -105,5 +127,17 @@ public class ExcelStyleProvider : IExcelStyleProvider
             styleIndexMap = new Dictionary<PredefinedStyle, uint>();
             return new ServiceResponse<Stylesheet> { IsSuccess = false, ErrorMessage = ex.Message };
         }
+    }
+
+    private static HexBinaryValue? NormalizeHexColor(string? color)
+    {
+        if (string.IsNullOrWhiteSpace(color))
+            return null;
+
+        var normalized = color.Trim().TrimStart('#').ToUpperInvariant();
+        if (normalized.Length is not 6 and not 8)
+            return null;
+
+        return normalized.All(Uri.IsHexDigit) ? normalized : null;
     }
 }

@@ -36,6 +36,8 @@ var results = await exporter.ExecuteAsync(
         DataDateUtc = new DateTime(2025, 8, 1),
         FreezeHeader = true,
         AutoFilter = true,
+        HeaderBackgroundColorHex = "#1F4E78",
+        HeaderTextColorHex = "#FFFFFF",
         SplitIntoMultipleSheets = true,
         SplitIntoMultipleFiles = false
     },
@@ -80,6 +82,14 @@ var results = await client.ExecuteAsync(
 ```
 
 The `ExecuteAsync` method returns a list of `BlobUploadResult` entries (one per generated file) containing the blob URI, SAS URI, and uploaded size.
+
+
+## Header style options
+You can customize header styling through `ExcelExportOptions`:
+- `HeaderBackgroundColorHex`: header row background color in HEX (`RRGGBB` or `AARRGGBB`, optional leading `#`).
+- `HeaderTextColorHex`: header text color in HEX (`RRGGBB` or `AARRGGBB`, optional leading `#`).
+
+Invalid color values are ignored and default header style is used.
 
 ## NuGet requirements
 - DocumentFormat.OpenXml
