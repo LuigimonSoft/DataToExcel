@@ -8,6 +8,8 @@ public class ExcelExportOptions
     public CultureInfo Culture { get; set; } = CultureInfo.InvariantCulture;
     public bool FreezeHeader { get; set; } = true;
     public bool AutoFilter { get; set; } = true;
+    public string? HeaderBackgroundColorHex { get; set; }
+    public string? HeaderTextColorHex { get; set; }
     public DateTime? DataDateUtc { get; set; } = DateTime.UtcNow.Date;
     public bool SplitIntoMultipleSheets { get; set; }
     public bool SplitIntoMultipleFiles { get; set; }

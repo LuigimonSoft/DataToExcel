@@ -55,11 +55,12 @@ public class ExcelExportService : IExcelExportService
                 sheetIndex++;
                 hasMore = await bufferedEnumerator.TryPeekNextAsync();
             } while (hasMore);
-        }, ct);
+        }, options, ct);
 
     private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsyncCore(
         Stream output,
         Func<WorkbookPart, Sheets, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeSheetsAsync,
+        ExcelExportOptions options,
         CancellationToken ct)
     {
         try
@@ -67,7 +68,7 @@ public class ExcelExportService : IExcelExportService
             if (!output.CanSeek)
                 throw new ArgumentException("Stream must be seekable", nameof(output));
 
-            var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
+            var styleResponse = _styleProvider.BuildStylesheet(options, out var styleMap);
             if (!styleResponse.IsSuccess || styleResponse.Data is null)
                 return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
             var stylesheet = styleResponse.Data;
@@ -101,7 +102,7 @@ public class ExcelExportService : IExcelExportService
             if (!output.CanSeek)
                 throw new ArgumentException("Stream must be seekable", nameof(output));
 
-            var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
+            var styleResponse = _styleProvider.BuildStylesheet(options, out var styleMap);
             if (!styleResponse.IsSuccess || styleResponse.Data is null)
                 return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
             var stylesheet = styleResponse.Data;
