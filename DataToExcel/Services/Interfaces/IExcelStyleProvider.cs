@@ -5,5 +5,5 @@ namespace DataToExcel.Services.Interfaces;
 
 public interface IExcelStyleProvider
 {
-    ServiceResponse<Stylesheet> BuildStylesheet(out IReadOnlyDictionary<PredefinedStyle, uint> styleIndexMap);
+    ServiceResponse<Stylesheet> BuildStylesheet(ExcelExportOptions options, out IReadOnlyDictionary<PredefinedStyle, uint> styleIndexMap);
 }
