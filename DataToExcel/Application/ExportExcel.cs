@@ -113,14 +113,15 @@ public class ExportExcel : IExportExcel
             var fileName = appendFileIndex
                 ? AppendFileIndex(baseGeneratedName, fileIndex)
                 : baseGeneratedName;
+            var blobName = ComposeBlobName(_registrationOptions.BlobPrefix, fileName);
 
-            OnFileGenerationStarted(fileName, fileIndex);
+            OnFileGenerationStarted(blobName, fileIndex);
             var result = await UploadExportAsync(
                 exportResponse,
                 fileName,
                 sasTtl,
                 ct);
-            OnFileGenerationCompleted(fileName, fileIndex, result);
+            OnFileGenerationCompleted(blobName, fileIndex, result);
 
             exports.Add(result);
             fileIndex++;
@@ -142,7 +143,7 @@ public class ExportExcel : IExportExcel
             : fileNameBase;
         var blobName = ComposeBlobName(_registrationOptions.BlobPrefix, fileName);
 
-        OnFileGenerationStarted(fileName, request.FileIndex);
+        OnFileGenerationStarted(blobName, request.FileIndex);
         var tempFile = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         try
         {
@@ -153,7 +154,7 @@ public class ExportExcel : IExportExcel
                     throw new InvalidOperationException(exportResponse.ErrorMessage ?? "Excel export failed");
                 fs.Position = 0;
                 var result = await UploadExportAsync(fs, blobName, request.SasTtl, ct);
-                OnFileGenerationCompleted(fileName, request.FileIndex, result);
+                OnFileGenerationCompleted(blobName, request.FileIndex, result);
                 return result;
             }
         }
@@ -164,11 +165,11 @@ public class ExportExcel : IExportExcel
         }
     }
 
-    private void OnFileGenerationStarted(string fileName, int fileIndex)
-        => FileGenerationStarted?.Invoke(this, new FileGenerationStartedEventArgs(fileName, fileIndex));
+    private void OnFileGenerationStarted(string blobName, int fileIndex)
+        => FileGenerationStarted?.Invoke(this, new FileGenerationStartedEventArgs(blobName, fileIndex));
 
-    private void OnFileGenerationCompleted(string fileName, int fileIndex, BlobUploadResult uploadResult)
-        => FileGenerationCompleted?.Invoke(this, new FileGenerationCompletedEventArgs(fileName, fileIndex, uploadResult));
+    private void OnFileGenerationCompleted(string blobName, int fileIndex, BlobUploadResult uploadResult)
+        => FileGenerationCompleted?.Invoke(this, new FileGenerationCompletedEventArgs(blobName, fileIndex, uploadResult));
 
     private sealed record SingleExportRequest(
         string BaseFileName,

@@ -197,7 +197,7 @@ public class ExcelExportClientTests
         Assert.NotNull(result);
         Assert.NotNull(started);
         Assert.NotNull(completed);
-        Assert.Equal(started!.FileName, completed!.FileName);
+        Assert.Equal(started!.BlobName, completed!.BlobName);
         Assert.Equal(1, started.FileIndex);
         Assert.Equal(1, completed.FileIndex);
     }

@@ -2,14 +2,14 @@ namespace DataToExcel.Models;
 
 public sealed class FileGenerationCompletedEventArgs : EventArgs
 {
-    public FileGenerationCompletedEventArgs(string fileName, int fileIndex, BlobUploadResult uploadResult)
+    public FileGenerationCompletedEventArgs(string blobName, int fileIndex, BlobUploadResult uploadResult)
     {
-        FileName = fileName;
+        BlobName = blobName;
         FileIndex = fileIndex;
         UploadResult = uploadResult;
     }
 
-    public string FileName { get; }
+    public string BlobName { get; }
     public int FileIndex { get; }
     public BlobUploadResult UploadResult { get; }
 }

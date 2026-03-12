@@ -2,12 +2,12 @@ namespace DataToExcel.Models;
 
 public sealed class FileGenerationStartedEventArgs : EventArgs
 {
-    public FileGenerationStartedEventArgs(string fileName, int fileIndex)
+    public FileGenerationStartedEventArgs(string blobName, int fileIndex)
     {
-        FileName = fileName;
+        BlobName = blobName;
         FileIndex = fileIndex;
     }
 
-    public string FileName { get; }
+    public string BlobName { get; }
     public int FileIndex { get; }
 }

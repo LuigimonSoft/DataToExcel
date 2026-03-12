@@ -359,12 +359,12 @@ public class ExportExcelTests
 
         useCase.FileGenerationStarted += (_, args) =>
         {
-            timeline.Add($"start:{args.FileIndex}:{args.FileName}");
+            timeline.Add($"start:{args.FileIndex}:{args.BlobName}");
         };
         useCase.FileGenerationCompleted += (_, args) =>
         {
-            timeline.Add($"done:{args.FileIndex}:{args.FileName}");
-            Assert.Equal(args.FileName, args.UploadResult.BlobName);
+            timeline.Add($"done:{args.FileIndex}:{args.BlobName}");
+            Assert.Equal(args.BlobName, args.UploadResult.BlobName);
         };
 
         var results = await useCase.ExecuteAsync(records, columns, "Report", options);
@@ -405,8 +405,8 @@ public class ExportExcelTests
         Assert.NotNull(completed);
         Assert.Equal(1, started!.FileIndex);
         Assert.Equal(1, completed!.FileIndex);
-        Assert.Equal(started.FileName, completed.FileName);
-        Assert.Equal(completed.FileName, completed.UploadResult.BlobName);
+        Assert.Equal(started.BlobName, completed.BlobName);
+        Assert.Equal(completed.BlobName, completed.UploadResult.BlobName);
     }
 
 

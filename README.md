@@ -87,17 +87,17 @@ When `SplitIntoMultipleFiles = true`, you can subscribe to two events to track g
 - `FileGenerationStarted`: fired right before each file is uploaded.
 - `FileGenerationCompleted`: fired after each file is uploaded.
 
-Both events provide the file name and file index (`part01`, `part02`, etc.).
+Both events provide the full `BlobName` (including prefix/path) and the file index (`part01`, `part02`, etc.).
 
 ```csharp
 exporter.FileGenerationStarted += (_, e) =>
 {
-    Console.WriteLine($"Starting file {e.FileIndex}: {e.FileName}");
+    Console.WriteLine($"Starting file {e.FileIndex}: {e.BlobName}");
 };
 
 exporter.FileGenerationCompleted += (_, e) =>
 {
-    Console.WriteLine($"Completed file {e.FileIndex}: {e.FileName} ({e.UploadResult.SizeBytes} bytes)");
+    Console.WriteLine($"Completed file {e.FileIndex}: {e.BlobName} ({e.UploadResult.SizeBytes} bytes)");
 };
 ```
 
