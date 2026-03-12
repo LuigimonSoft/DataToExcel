@@ -15,6 +15,9 @@ public class ExportExcel : IExportExcel
     private readonly IBlobStorageRepository _blobRepository;
     private readonly ExcelExportRegistrationOptions _registrationOptions;
 
+    public event EventHandler<FileGenerationStartedEventArgs>? FileGenerationStarted;
+    public event EventHandler<FileGenerationCompletedEventArgs>? FileGenerationCompleted;
+
     public ExportExcel(IExcelExportService excelService,
         IFileNamingService namingService,
         IBlobStorageRepository blobRepository,
@@ -107,13 +110,18 @@ public class ExportExcel : IExportExcel
             var exportResponse = await exportChunkAsync();
             var hasMore = await hasMoreAsync();
             var appendFileIndex = hasMore || fileIndex > 1;
+            var fileName = appendFileIndex
+                ? AppendFileIndex(baseGeneratedName, fileIndex)
+                : baseGeneratedName;
+
+            OnFileGenerationStarted(fileName, fileIndex);
             var result = await UploadExportAsync(
                 exportResponse,
-                baseGeneratedName,
+                fileName,
                 sasTtl,
-                appendFileIndex,
-                fileIndex,
                 ct);
+            OnFileGenerationCompleted(fileName, fileIndex, result);
+
             exports.Add(result);
             fileIndex++;
             if (!hasMore)
@@ -134,6 +142,7 @@ public class ExportExcel : IExportExcel
             : fileNameBase;
         var blobName = ComposeBlobName(_registrationOptions.BlobPrefix, fileName);
 
+        OnFileGenerationStarted(fileName, request.FileIndex);
         var tempFile = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         try
         {
@@ -143,7 +152,9 @@ public class ExportExcel : IExportExcel
                 if (!exportResponse.IsSuccess)
                     throw new InvalidOperationException(exportResponse.ErrorMessage ?? "Excel export failed");
                 fs.Position = 0;
-                return await UploadExportAsync(fs, blobName, request.SasTtl, ct);
+                var result = await UploadExportAsync(fs, blobName, request.SasTtl, ct);
+                OnFileGenerationCompleted(fileName, request.FileIndex, result);
+                return result;
             }
         }
         finally
@@ -152,6 +163,12 @@ public class ExportExcel : IExportExcel
                 File.Delete(tempFile);
         }
     }
+
+    private void OnFileGenerationStarted(string fileName, int fileIndex)
+        => FileGenerationStarted?.Invoke(this, new FileGenerationStartedEventArgs(fileName, fileIndex));
+
+    private void OnFileGenerationCompleted(string fileName, int fileIndex, BlobUploadResult uploadResult)
+        => FileGenerationCompleted?.Invoke(this, new FileGenerationCompletedEventArgs(fileName, fileIndex, uploadResult));
 
     private sealed record SingleExportRequest(
         string BaseFileName,
@@ -239,19 +256,14 @@ public class ExportExcel : IExportExcel
 
     private async Task<BlobUploadResult> UploadExportAsync(
         FileStream stream,
-        string baseGeneratedName,
+        string fileName,
         TimeSpan? sasTtl,
-        bool appendFileIndex,
-        int fileIndex,
         CancellationToken ct)
     {
-        var fileName = appendFileIndex
-            ? AppendFileIndex(baseGeneratedName, fileIndex)
-            : baseGeneratedName;
         var blobName = ComposeBlobName(_registrationOptions.BlobPrefix, fileName);
         try
         {
-            return await UploadExportAsync(stream, blobName, sasTtl, ct);
+            return await UploadExportAsync((Stream)stream, blobName, sasTtl, ct);
         }
         finally
         {

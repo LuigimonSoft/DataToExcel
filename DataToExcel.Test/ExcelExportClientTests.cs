@@ -151,6 +151,57 @@ public class ExcelExportClientTests
         Assert.EndsWith(".xlsx", result.BlobName);
     }
 
+
+    [Fact]
+    public async Task GivenContainerCtorWhenExecuteAsyncThenRaisesForwardedFileGenerationEvents()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Rows.Add("Alice");
+        var reader = table.CreateDataReader();
+        var records = new List<IDataRecord>();
+        while (reader.Read()) records.Add(reader);
+
+        var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
+        var options = new ExcelExportOptions { SheetName = "Names" };
+
+        var containerMock = new Mock<IBlobContainerClient>();
+        var blobMock = new Mock<IBlobClient>();
+
+        containerMock.Setup(c => c.Name).Returns("test");
+        containerMock
+            .Setup(c => c.CreateIfNotExistsAsync(PublicAccessType.None, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        containerMock
+            .Setup(c => c.GetBlobClient(It.IsAny<string>()))
+            .Returns(blobMock.Object);
+
+        blobMock.Setup(b => b.CanGenerateSasUri).Returns(true);
+        blobMock.Setup(b => b.Uri).Returns(new Uri("https://example.com/blob"));
+        blobMock
+            .Setup(b => b.GenerateSasUri(It.IsAny<BlobSasBuilder>()))
+            .Returns(new Uri("https://example.com/blob?sas=1"));
+        blobMock
+            .Setup(b => b.UploadAsync(It.IsAny<Stream>(), It.IsAny<BlobUploadOptions>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var client = new DataToExcel.ExcelExportClient(containerMock.Object, TimeSpan.FromMinutes(5));
+
+        FileGenerationStartedEventArgs? started = null;
+        FileGenerationCompletedEventArgs? completed = null;
+        client.FileGenerationStarted += (_, args) => started = args;
+        client.FileGenerationCompleted += (_, args) => completed = args;
+
+        var result = (await client.ExecuteAsync(records, columns, "Report", options)).Single();
+
+        Assert.NotNull(result);
+        Assert.NotNull(started);
+        Assert.NotNull(completed);
+        Assert.Equal(started!.FileName, completed!.FileName);
+        Assert.Equal(1, started.FileIndex);
+        Assert.Equal(1, completed.FileIndex);
+    }
+
     [Fact]
     public async Task GivenContainerCtor_WhenExecuteAsyncAsyncEnumerable_ThenUploadsBlob()
     {

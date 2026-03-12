@@ -81,6 +81,26 @@ var results = await client.ExecuteAsync(
 
 The `ExecuteAsync` method returns a list of `BlobUploadResult` entries (one per generated file) containing the blob URI, SAS URI, and uploaded size.
 
+### Tracking asynchronous multi-file progress
+When `SplitIntoMultipleFiles = true`, you can subscribe to two events to track generation status:
+
+- `FileGenerationStarted`: fired right before each file is uploaded.
+- `FileGenerationCompleted`: fired after each file is uploaded.
+
+Both events provide the file name and file index (`part01`, `part02`, etc.).
+
+```csharp
+exporter.FileGenerationStarted += (_, e) =>
+{
+    Console.WriteLine($"Starting file {e.FileIndex}: {e.FileName}");
+};
+
+exporter.FileGenerationCompleted += (_, e) =>
+{
+    Console.WriteLine($"Completed file {e.FileIndex}: {e.FileName} ({e.UploadResult.SizeBytes} bytes)");
+};
+```
+
 ## NuGet requirements
 - DocumentFormat.OpenXml
 - Azure.Storage.Blobs
