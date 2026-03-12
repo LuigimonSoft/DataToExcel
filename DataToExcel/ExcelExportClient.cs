@@ -15,6 +15,9 @@ public class ExcelExportClient : IExportExcel
 {
     private readonly ExportExcel _inner;
 
+    public event EventHandler<FileGenerationStartedEventArgs>? FileGenerationStarted;
+    public event EventHandler<FileGenerationCompletedEventArgs>? FileGenerationCompleted;
+
     public ExcelExportClient(string connectionString, string containerName, TimeSpan? defaultSasTtl = null, string? blobPrefix = null)
     {
         var options = new ExcelExportRegistrationOptions
@@ -25,6 +28,7 @@ public class ExcelExportClient : IExportExcel
             BlobPrefix = blobPrefix
         };
         _inner = Build(options);
+        AttachInnerEvents();
     }
 
     public ExcelExportClient(Uri containerUri, TokenCredential? credential = null, TimeSpan? defaultSasTtl = null, string? blobPrefix = null)
@@ -37,6 +41,7 @@ public class ExcelExportClient : IExportExcel
             BlobPrefix = blobPrefix
         };
         _inner = Build(options);
+        AttachInnerEvents();
     }
 
     public ExcelExportClient(IBlobContainerClient container, TimeSpan? defaultSasTtl = null, string? blobPrefix = null)
@@ -48,6 +53,13 @@ public class ExcelExportClient : IExportExcel
             BlobPrefix = blobPrefix
         };
         _inner = Build(options, container);
+        AttachInnerEvents();
+    }
+
+    private void AttachInnerEvents()
+    {
+        _inner.FileGenerationStarted += (_, args) => FileGenerationStarted?.Invoke(this, args);
+        _inner.FileGenerationCompleted += (_, args) => FileGenerationCompleted?.Invoke(this, args);
     }
 
     private static ExportExcel Build(ExcelExportRegistrationOptions options, IBlobContainerClient? container = null)

@@ -338,6 +338,94 @@ public class ExportExcelTests
         Assert.Contains(blobNames, name => name.Contains("_part02", StringComparison.Ordinal));
     }
 
+
+    [Fact]
+    public async Task GivenSplitIntoMultipleFilesWhenExecuteAsyncThenRaisesStartedAndCompletedEventsInOrder()
+    {
+        var records = new LargeRecordEnumerable(ExcelExportLimits.MaxDataRowsPerSheet + 1);
+        var columns = new List<ColumnDefinition> { new("Value", "Value", ColumnDataType.String) };
+        var options = new ExcelExportOptions
+        {
+            SplitIntoMultipleFiles = true,
+            SplitIntoMultipleSheets = true
+        };
+
+        var timeline = new List<string>();
+        var useCase = new ExportExcel(
+            new CountingExcelExportService(),
+            new FileNamingService(),
+            BuildRepositoryMockWithTimeline(timeline).Object,
+            new ExcelExportRegistrationOptions());
+
+        useCase.FileGenerationStarted += (_, args) =>
+        {
+            timeline.Add($"start:{args.FileIndex}:{args.BlobName}");
+        };
+        useCase.FileGenerationCompleted += (_, args) =>
+        {
+            timeline.Add($"done:{args.FileIndex}:{args.BlobName}");
+            Assert.Equal(args.BlobName, args.UploadResult.BlobName);
+        };
+
+        var results = await useCase.ExecuteAsync(records, columns, "Report", options);
+
+        Assert.Equal(2, results.Count);
+        Assert.Collection(timeline,
+            entry => Assert.Matches(@"^start:1:.*_part01\.xlsx$", entry),
+            entry => Assert.Matches(@"^upload:.*_part01\.xlsx$", entry),
+            entry => Assert.Matches(@"^done:1:.*_part01\.xlsx$", entry),
+            entry => Assert.Matches(@"^start:2:.*_part02\.xlsx$", entry),
+            entry => Assert.Matches(@"^upload:.*_part02\.xlsx$", entry),
+            entry => Assert.Matches(@"^done:2:.*_part02\.xlsx$", entry));
+    }
+
+    [Fact]
+    public async Task GivenSingleFileExportWhenExecuteAsyncThenRaisesStartedAndCompletedOnceWithoutErrors()
+    {
+        var records = new LargeRecordEnumerable(10);
+        var columns = new List<ColumnDefinition> { new("Value", "Value", ColumnDataType.String) };
+        var options = new ExcelExportOptions { SplitIntoMultipleFiles = false };
+
+        FileGenerationStartedEventArgs? started = null;
+        FileGenerationCompletedEventArgs? completed = null;
+
+        var useCase = new ExportExcel(
+            new CountingExcelExportService(),
+            new FileNamingService(),
+            BuildRepositoryMockWithTimeline(new List<string>()).Object,
+            new ExcelExportRegistrationOptions());
+
+        useCase.FileGenerationStarted += (_, args) => started = args;
+        useCase.FileGenerationCompleted += (_, args) => completed = args;
+
+        var results = await useCase.ExecuteAsync(records, columns, "Report", options);
+
+        Assert.Single(results);
+        Assert.NotNull(started);
+        Assert.NotNull(completed);
+        Assert.Equal(1, started!.FileIndex);
+        Assert.Equal(1, completed!.FileIndex);
+        Assert.Equal(started.BlobName, completed.BlobName);
+        Assert.Equal(completed.BlobName, completed.UploadResult.BlobName);
+    }
+
+
+
+    private static Mock<DataToExcel.Repositories.Interfaces.IBlobStorageRepository> BuildRepositoryMockWithTimeline(List<string> timeline)
+    {
+        var repoMock = new Mock<DataToExcel.Repositories.Interfaces.IBlobStorageRepository>();
+        repoMock
+            .Setup(r => r.UploadExcelAsync(It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<TimeSpan?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Stream _, string blobName, TimeSpan? __, CancellationToken ___) =>
+            {
+                timeline.Add($"upload:{blobName}");
+                return new RepositoryResponse<BlobUploadResult>(
+                    new BlobUploadResult("test", blobName, new Uri("https://example.com/blob"), new Uri("https://example.com/blob?sas=1"), 0));
+            });
+
+        return repoMock;
+    }
+
     private static (Mock<IBlobContainerClient> containerMock,
         IExportExcel useCase,
         List<IDataRecord> records,

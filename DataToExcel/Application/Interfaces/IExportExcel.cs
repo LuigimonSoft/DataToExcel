@@ -5,6 +5,9 @@ namespace DataToExcel.Application.Interfaces;
 
 public interface IExportExcel
 {
+    event EventHandler<FileGenerationStartedEventArgs>? FileGenerationStarted;
+    event EventHandler<FileGenerationCompletedEventArgs>? FileGenerationCompleted;
+
     Task<IReadOnlyList<BlobUploadResult>> ExecuteAsync(IEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         string baseFileName,
