@@ -1,5 +1,7 @@
 using System.Data;
+using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Security;
 using DataToExcel.Application.Interfaces;
 using DataToExcel.Models;
 using DataToExcel.Repositories.Interfaces;
@@ -85,7 +87,12 @@ public class ExportExcel : IExportExcel
             sasTtl,
             () =>
             {
-                var chunk = TakeNext(bufferedEnumerator, ExcelExportLimits.MaxDataRowsPerSheet, ct);
+                var chunk = TakeNext(
+                    bufferedEnumerator,
+                    columns,
+                    ExcelExportLimits.MaxDataRowsPerSheet,
+                    ExcelExportLimits.MaxWorksheetPartBytes,
+                    ct);
                 return ExportToTempFileAsync(stream => _excelService.ExportAsync(chunk, columns, stream, exportOptions, ct));
             },
             () => bufferedEnumerator.TryPeekNextAsync(),
@@ -162,18 +169,101 @@ public class ExportExcel : IExportExcel
         bool ShouldAppendFileIndex,
         int FileIndex);
 
-    private static async IAsyncEnumerable<IDataRecord> TakeNext(BufferedAsyncRecordEnumerator enumerator, int maxRows,
+    private static async IAsyncEnumerable<IDataRecord> TakeNext(
+        BufferedAsyncRecordEnumerator enumerator,
+        IReadOnlyList<ColumnDefinition> columns,
+        int maxRows,
+        long maxWorksheetPartBytes,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var written = 0;
+        var estimatedBytes = EstimateWorksheetFixedBytes(columns);
         while (written < maxRows && await enumerator.TryGetNextAsync())
         {
             ct.ThrowIfCancellationRequested();
             var record = enumerator.Current ?? throw new InvalidOperationException("Expected record instance.");
+            var rowBytes = EstimateRowBytes(record, columns, written + ExcelExportLimits.HeaderRowCount + 1);
+            if (written > 0 && estimatedBytes + rowBytes > maxWorksheetPartBytes)
+            {
+                enumerator.BufferCurrent();
+                yield break;
+            }
+
             yield return record;
             written++;
+            estimatedBytes += rowBytes;
         }
     }
+
+    private static long EstimateWorksheetFixedBytes(IReadOnlyList<ColumnDefinition> columns)
+    {
+        const long worksheetMarkupBytes = 512;
+        return worksheetMarkupBytes + EstimateHeaderBytes(columns);
+    }
+
+    private static long EstimateHeaderBytes(IReadOnlyList<ColumnDefinition> columns)
+    {
+        var bytes = 64L;
+        foreach (var column in columns)
+        {
+            bytes += EstimateCellBytes(column.Title, ColumnDataType.String, includeStyleBytes: true);
+        }
+
+        return bytes;
+    }
+
+    private static long EstimateRowBytes(IDataRecord record, IReadOnlyList<ColumnDefinition> columns, int rowNumber)
+    {
+        var bytes = 32L + CountDigits(rowNumber);
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var column = columns[i];
+            var ordinal = TryGetOrdinal(record, column.FieldName);
+            if (ordinal < 0 || record.IsDBNull(ordinal))
+            {
+                bytes += 12;
+                continue;
+            }
+
+            bytes += EstimateCellBytes(record.GetValue(ordinal), column.DataType, includeStyleBytes: true);
+        }
+
+        return bytes;
+    }
+
+    private static int TryGetOrdinal(IDataRecord record, string fieldName)
+    {
+        try
+        {
+            return record.GetOrdinal(fieldName);
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return -1;
+        }
+    }
+
+    private static long EstimateCellBytes(object value, ColumnDataType dataType, bool includeStyleBytes)
+    {
+        var valueLength = dataType switch
+        {
+            ColumnDataType.Number or ColumnDataType.Currency or ColumnDataType.Percentage
+                => Convert.ToString(value, CultureInfo.InvariantCulture)?.Length ?? 0,
+            ColumnDataType.DateTime
+                => Convert.ToDateTime(value, CultureInfo.InvariantCulture).ToOADate()
+                    .ToString(CultureInfo.InvariantCulture).Length,
+            ColumnDataType.Boolean
+                => 1,
+            _ => SecurityElement.Escape(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty)?.Length ?? 0
+        };
+
+        var styleBytes = includeStyleBytes ? 8 : 0;
+        var inlineStringBytes = dataType is ColumnDataType.String ? 24 : 0;
+        return 32L + styleBytes + inlineStringBytes + valueLength;
+    }
+
+    private static int CountDigits(int value)
+        => value == 0 ? 1 : (int)Math.Floor(Math.Log10(Math.Abs(value)) + 1);
 
     private static ExcelExportOptions CloneOptions(ExcelExportOptions options, bool splitIntoMultipleSheets, bool splitIntoMultipleFiles)
         => new()

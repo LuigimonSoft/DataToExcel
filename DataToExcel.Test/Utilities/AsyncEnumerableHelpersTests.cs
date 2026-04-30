@@ -68,6 +68,31 @@ public class AsyncEnumerableHelpersTests
         Assert.Null(buffered.Current);
     }
 
+    [Fact]
+    public async Task BufferedAsyncRecordEnumeratorCanReplayCurrentRecord()
+    {
+        var items = new List<IDataRecord>
+        {
+            new FakeDataRecord("A"),
+            new FakeDataRecord("B")
+        };
+
+        await using var enumerator = AsyncEnumerableHelpers.ToAsyncEnumerable(items, CancellationToken.None)
+            .GetAsyncEnumerator();
+        var buffered = new BufferedAsyncRecordEnumerator(enumerator);
+
+        Assert.True(await buffered.TryGetNextAsync());
+        Assert.Equal("A", buffered.Current?.GetString(0));
+
+        buffered.BufferCurrent();
+
+        Assert.True(await buffered.TryGetNextAsync());
+        Assert.Equal("A", buffered.Current?.GetString(0));
+
+        Assert.True(await buffered.TryGetNextAsync());
+        Assert.Equal("B", buffered.Current?.GetString(0));
+    }
+
     [ExcludeFromCodeCoverage]
     private sealed class FakeDataRecord : IDataRecord
     {

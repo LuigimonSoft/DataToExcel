@@ -45,6 +45,14 @@ internal sealed class BufferedAsyncRecordEnumerator
         Current = null;
         return false;
     }
+
+    public void BufferCurrent()
+    {
+        if (Current is null)
+            throw new InvalidOperationException("There is no current record to buffer.");
+
+        _hasBuffered = true;
+    }
 }
 
 internal static class AsyncEnumerableHelpers
