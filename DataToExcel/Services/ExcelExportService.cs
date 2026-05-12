@@ -406,16 +406,31 @@ public class ExcelExportService : IExcelExportService
 
     private static int[] BuildOrdinals(IDataRecord record, IReadOnlyList<ColumnDefinition> columns)
     {
+        var ordinalsByName = BuildOrdinalMap(record);
         var ordinals = new int[columns.Count];
         for (int i = 0; i < columns.Count; i++)
         {
-            ordinals[i] = TryGetOrdinal(record, columns[i].FieldName);
+            ordinals[i] = TryGetOrdinal(record, ordinalsByName, columns[i].FieldName);
         }
         return ordinals;
     }
 
-    private static int TryGetOrdinal(IDataRecord record, string fieldName)
+    private static Dictionary<string, int> BuildOrdinalMap(IDataRecord record)
     {
+        var map = new Dictionary<string, int>(record.FieldCount, StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < record.FieldCount; i++)
+        {
+            map[record.GetName(i)] = i;
+        }
+
+        return map;
+    }
+
+    private static int TryGetOrdinal(IDataRecord record, IReadOnlyDictionary<string, int> ordinalsByName, string fieldName)
+    {
+        if (ordinalsByName.TryGetValue(fieldName, out var ordinal))
+            return ordinal;
+
         try
         {
             return record.GetOrdinal(fieldName);
