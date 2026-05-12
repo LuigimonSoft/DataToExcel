@@ -12,6 +12,7 @@ namespace DataToExcel.Services;
 
 public class ExcelExportService : IExcelExportService
 {
+    private const int GarbageCollectionRowInterval = 50_000;
     private readonly IExcelStyleProvider _styleProvider;
     public ExcelExportService(IExcelStyleProvider styleProvider)
         => _styleProvider = styleProvider;
@@ -75,6 +76,7 @@ public class ExcelExportService : IExcelExportService
                 seekableStream.Position = 0;
                 await seekableStream.CopyToAsync(output, 81920, ct);
                 await output.FlushAsync(ct);
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
             }
             else
             {
@@ -368,6 +370,11 @@ public class ExcelExportService : IExcelExportService
             ordinals ??= BuildOrdinals(record, context.Columns);
             WriteRow(writer, record, context.Columns, ordinals, context.StyleMap, groupField, groupIndexValue, ref currentGroup);
             written++;
+
+            if (written % GarbageCollectionRowInterval == 0)
+            {
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
+            }
         }
     }
 
