@@ -462,6 +462,78 @@ public class ExcelExportServiceTests
         Assert.Equal("Alice", dataCells[1].InnerText);
     }
 
+
+    [Fact]
+    public async Task GivenCaseMismatchedFieldNamesWhenExportAsyncThenValuesAreResolvedCaseInsensitive()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Columns.Add("Age", typeof(int));
+        table.Rows.Add("Alice", 30);
+        var records = ToAsyncEnumerable(table);
+
+        var columns = new List<ColumnDefinition>
+        {
+            new("name","name", ColumnDataType.String),
+            new("age","age", ColumnDataType.Number)
+        };
+
+        var service = new ExcelExportService(new ExcelStyleProvider());
+        using var ms = new MemoryStream();
+        var response = await service.ExportAsync(records, columns, ms, new ExcelExportOptions());
+
+        Assert.True(response.IsSuccess);
+        ms.Position = 0;
+        using var doc = SpreadsheetDocument.Open(ms, false);
+        var rows = doc.WorkbookPart!.WorksheetParts.First().Worksheet.GetFirstChild<SheetData>()!.Elements<Row>().ToList();
+        var dataCells = rows[1].Elements<Cell>().ToList();
+        Assert.Equal("Alice", dataCells[0].InnerText);
+        Assert.Equal("30", dataCells[1].CellValue!.Text);
+    }
+
+    [Fact]
+    public async Task GivenLongSheetNameWithoutSplitWhenExportAsyncThenSheetNameIsTrimmedTo31Chars()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Rows.Add("Alice");
+
+        var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
+        var options = new ExcelExportOptions { SheetName = new string('X', 40), SplitIntoMultipleSheets = false };
+        var service = new ExcelExportService(new ExcelStyleProvider());
+        using var ms = new MemoryStream();
+
+        var response = await service.ExportAsync(ToAsyncEnumerable(table), columns, ms, options);
+
+        Assert.True(response.IsSuccess);
+        ms.Position = 0;
+        using var doc = SpreadsheetDocument.Open(ms, false);
+        var sheet = doc.WorkbookPart!.Workbook.Sheets!.Elements<Sheet>().First();
+        Assert.Equal(31, sheet.Name!.Value!.Length);
+        Assert.Equal(new string('X', 31), sheet.Name!.Value);
+    }
+
+    [Fact]
+    public async Task GivenNonSeekableOutputWhenExportAsyncThenWorkbookIsWrittenUsingStaging()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Name", typeof(string));
+        table.Rows.Add("Alice");
+
+        var service = new ExcelExportService(new ExcelStyleProvider());
+        var columns = new List<ColumnDefinition> { new("Name", "Name", ColumnDataType.String) };
+        using var nonSeekable = new NonSeekableWriteOnlyStream();
+
+        var response = await service.ExportAsync(ToAsyncEnumerable(table), columns, nonSeekable, new ExcelExportOptions());
+
+        Assert.True(response.IsSuccess);
+        var bytes = nonSeekable.ToArray();
+        using var resultStream = new MemoryStream(bytes);
+        using var doc = SpreadsheetDocument.Open(resultStream, false);
+        var dataRows = doc.WorkbookPart!.WorksheetParts.First().Worksheet.GetFirstChild<SheetData>()!.Elements<Row>().ToList();
+        Assert.Equal("Alice", dataRows[1].Elements<Cell>().First().InnerText);
+    }
+
     private static DataTable BuildGroupedTable(bool withItem = false)
     {
         var table = new DataTable();
@@ -601,4 +673,31 @@ public class ExcelExportServiceTests
             return new ForwardOnlyAsyncRecords(table);
         }
     }
+
+    private sealed class NonSeekableWriteOnlyStream : Stream
+    {
+        private readonly MemoryStream _inner = new();
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _inner.Length;
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => _inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => _inner.SetLength(value);
+        public override void Write(byte[] buffer, int offset, int count) => _inner.Write(buffer, offset, count);
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            => _inner.WriteAsync(buffer, cancellationToken);
+
+        public byte[] ToArray() => _inner.ToArray();
+    }
+
 }
