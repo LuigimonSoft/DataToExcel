@@ -57,6 +57,51 @@ public class ExcelExportService : IExcelExportService
             } while (hasMore);
         }, ct);
 
+
+    private static async Task<ServiceResponse<Stream>> ExportUsingSeekableStreamAsync(
+        Stream output,
+        Func<Stream, Task> exportToSeekableStreamAsync,
+        CancellationToken ct)
+    {
+        var needsStaging = !output.CanSeek;
+        var seekableStream = needsStaging ? CreateTempFileStream() : output;
+
+        try
+        {
+            await exportToSeekableStreamAsync(seekableStream);
+
+            if (needsStaging)
+            {
+                seekableStream.Position = 0;
+                await seekableStream.CopyToAsync(output, 81920, ct);
+                await output.FlushAsync(ct);
+            }
+            else
+            {
+                await output.FlushAsync(ct);
+            }
+
+            return new ServiceResponse<Stream>(output) { IsSuccess = true };
+        }
+        finally
+        {
+            if (needsStaging)
+            {
+                var tempName = (seekableStream as FileStream)?.Name;
+                await seekableStream.DisposeAsync();
+                if (!string.IsNullOrWhiteSpace(tempName) && File.Exists(tempName))
+                    File.Delete(tempName);
+            }
+        }
+    }
+
+    private static FileStream CreateTempFileStream()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        return new FileStream(tempFile, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan | FileOptions.DeleteOnClose);
+    }
+
     private async Task<ServiceResponse<Stream>> ExportMultipleSheetsAsyncCore(
         Stream output,
         Func<WorkbookPart, Sheets, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeSheetsAsync,
@@ -64,26 +109,23 @@ public class ExcelExportService : IExcelExportService
     {
         try
         {
-            if (!output.CanSeek)
-                throw new ArgumentException("Stream must be seekable", nameof(output));
-
             var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
             if (!styleResponse.IsSuccess || styleResponse.Data is null)
                 return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
             var stylesheet = styleResponse.Data;
 
-            using var document = SpreadsheetDocument.Create(output, SpreadsheetDocumentType.Workbook, true);
-            var workbookPart = document.AddWorkbookPart();
-            workbookPart.Workbook = new Workbook();
-            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
-            stylesPart.Stylesheet = stylesheet;
-            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+            return await ExportUsingSeekableStreamAsync(output, async seekableStream =>
+            {
+                using var document = SpreadsheetDocument.Create(seekableStream, SpreadsheetDocumentType.Workbook, true);
+                var workbookPart = document.AddWorkbookPart();
+                workbookPart.Workbook = new Workbook();
+                var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
+                stylesPart.Stylesheet = stylesheet;
+                var sheets = workbookPart.Workbook.AppendChild(new Sheets());
 
-            await writeSheetsAsync(workbookPart, sheets, styleMap);
-
-            workbookPart.Workbook.Save();
-            await output.FlushAsync(ct);
-            return new ServiceResponse<Stream>(output) { IsSuccess = true };
+                await writeSheetsAsync(workbookPart, sheets, styleMap);
+                workbookPart.Workbook.Save();
+            }, ct);
         }
         catch (Exception ex)
         {
@@ -98,33 +140,31 @@ public class ExcelExportService : IExcelExportService
     {
         try
         {
-            if (!output.CanSeek)
-                throw new ArgumentException("Stream must be seekable", nameof(output));
-
             var styleResponse = _styleProvider.BuildStylesheet(out var styleMap);
             if (!styleResponse.IsSuccess || styleResponse.Data is null)
                 return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
             var stylesheet = styleResponse.Data;
 
-            using var document = SpreadsheetDocument.Create(output, SpreadsheetDocumentType.Workbook, true);
-            var workbookPart = document.AddWorkbookPart();
-            workbookPart.Workbook = new Workbook();
-            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
-            stylesPart.Stylesheet = stylesheet;
-            var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
-
-            await writeWorksheetAsync(worksheetPart, styleMap);
-
-            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
-            sheets.AppendChild(new Sheet
+            return await ExportUsingSeekableStreamAsync(output, async seekableStream =>
             {
-                Id = workbookPart.GetIdOfPart(worksheetPart),
-                SheetId = 1,
-                Name = options.SheetName
-            });
-            workbookPart.Workbook.Save();
-            await output.FlushAsync(ct);
-            return new ServiceResponse<Stream>(output) { IsSuccess = true };
+                using var document = SpreadsheetDocument.Create(seekableStream, SpreadsheetDocumentType.Workbook, true);
+                var workbookPart = document.AddWorkbookPart();
+                workbookPart.Workbook = new Workbook();
+                var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
+                stylesPart.Stylesheet = stylesheet;
+                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+
+                await writeWorksheetAsync(worksheetPart, styleMap);
+
+                var sheets = workbookPart.Workbook.AppendChild(new Sheets());
+                sheets.AppendChild(new Sheet
+                {
+                    Id = workbookPart.GetIdOfPart(worksheetPart),
+                    SheetId = 1,
+                    Name = options.SheetName
+                });
+                workbookPart.Workbook.Save();
+            }, ct);
         }
         catch (Exception ex)
         {
@@ -273,60 +313,6 @@ public class ExcelExportService : IExcelExportService
         });
     }
 
-    private static async Task WriteRowsCoreAsync(OpenXmlWriter writer,
-        WriteRowsContext context,
-        Func<Task<bool>> moveNextAsync,
-        Func<IDataRecord?> current)
-    {
-        var (groupIndexValue, groupField) = GetGroupInfo(context.Columns);
-        object? currentGroup = null;
-        var written = 0;
-
-        while (await moveNextAsync())
-        {
-            context.CancellationToken.ThrowIfCancellationRequested();
-            if (written >= context.MaxRows)
-            {
-                if (context.EnforceLimit)
-                {
-                    throw new InvalidOperationException(
-                        $"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
-                }
-                break;
-            }
-
-            var record = current() ?? throw new InvalidOperationException("Expected record instance.");
-            WriteRow(writer, record, context.Columns, context.StyleMap, groupField, groupIndexValue, ref currentGroup);
-            written++;
-        }
-    }
-
-    private readonly record struct WriteRowsContext(
-        IReadOnlyList<ColumnDefinition> Columns,
-        IReadOnlyDictionary<PredefinedStyle, uint> StyleMap,
-        int MaxRows,
-        bool EnforceLimit,
-        CancellationToken CancellationToken);
-
-    private static void WriteRow(OpenXmlWriter writer,
-        IDataRecord record,
-        IReadOnlyList<ColumnDefinition> columns,
-        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        string? groupField,
-        int groupIndexValue,
-        ref object? currentGroup)
-    {
-        var dataRow = CreateDisconnectedRow(record, columns);
-        var isGroupRow = IsNewGroupRow(dataRow, groupField, currentGroup, out var newGroupValue);
-        if (isGroupRow)
-            currentGroup = newGroupValue;
-
-        var row = CreateRow(groupField is not null, isGroupRow);
-        writer.WriteStartElement(row);
-        WriteRowCells(writer, dataRow, columns, styleMap, groupField, groupIndexValue, isGroupRow);
-        writer.WriteEndElement();
-        ClearDataRow(dataRow);
-    }
 
     private static string ComposeSheetName(string sheetName, int sheetIndex)
     {
@@ -355,13 +341,103 @@ public class ExcelExportService : IExcelExportService
         return (groupInfo.i, columns[groupInfo.i].FieldName);
     }
 
-    private static bool IsNewGroupRow(DataRow dataRow, string? groupField, object? currentGroup, out object? newGroupValue)
+    private static async Task WriteRowsCoreAsync(OpenXmlWriter writer,
+        WriteRowsContext context,
+        Func<Task<bool>> moveNextAsync,
+        Func<IDataRecord?> current)
+    {
+        var (groupIndexValue, groupField) = GetGroupInfo(context.Columns);
+        object? currentGroup = null;
+        var written = 0;
+        int[]? ordinals = null;
+
+        while (await moveNextAsync())
+        {
+            context.CancellationToken.ThrowIfCancellationRequested();
+            if (written >= context.MaxRows)
+            {
+                if (context.EnforceLimit)
+                {
+                    throw new InvalidOperationException(
+                        $"Row limit exceeded ({ExcelExportLimits.MaxRowsPerSheet}). Enable splitting to export more rows.");
+                }
+                break;
+            }
+
+            var record = current() ?? throw new InvalidOperationException("Expected record instance.");
+            ordinals ??= BuildOrdinals(record, context.Columns);
+            WriteRow(writer, record, context.Columns, ordinals, context.StyleMap, groupField, groupIndexValue, ref currentGroup);
+            written++;
+        }
+    }
+
+    private readonly record struct WriteRowsContext(
+        IReadOnlyList<ColumnDefinition> Columns,
+        IReadOnlyDictionary<PredefinedStyle, uint> StyleMap,
+        int MaxRows,
+        bool EnforceLimit,
+        CancellationToken CancellationToken);
+
+    private static void WriteRow(OpenXmlWriter writer,
+        IDataRecord record,
+        IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyList<int> ordinals,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        string? groupField,
+        int groupIndexValue,
+        ref object? currentGroup)
+    {
+        var isGroupRow = IsNewGroupRow(record, ordinals, groupField, groupIndexValue, currentGroup, out var newGroupValue);
+        if (isGroupRow)
+            currentGroup = newGroupValue;
+
+        var row = CreateRow(groupField is not null, isGroupRow);
+        writer.WriteStartElement(row);
+        WriteRowCells(writer, record, columns, ordinals, styleMap, groupField, groupIndexValue, isGroupRow);
+        writer.WriteEndElement();
+    }
+
+    private static int[] BuildOrdinals(IDataRecord record, IReadOnlyList<ColumnDefinition> columns)
+    {
+        var ordinals = new int[columns.Count];
+        for (int i = 0; i < columns.Count; i++)
+        {
+            ordinals[i] = TryGetOrdinal(record, columns[i].FieldName);
+        }
+        return ordinals;
+    }
+
+    private static int TryGetOrdinal(IDataRecord record, string fieldName)
+    {
+        try
+        {
+            return record.GetOrdinal(fieldName);
+        }
+        catch (IndexOutOfRangeException)
+        {
+            return -1;
+        }
+    }
+
+    private static object? GetRecordValue(IDataRecord record, int ordinal)
+    {
+        if (ordinal < 0 || record.IsDBNull(ordinal))
+            return null;
+        return record.GetValue(ordinal);
+    }
+
+    private static bool IsNewGroupRow(IDataRecord record,
+        IReadOnlyList<int> ordinals,
+        string? groupField,
+        int groupIndex,
+        object? currentGroup,
+        out object? newGroupValue)
     {
         newGroupValue = currentGroup;
-        if (groupField is null)
+        if (groupField is null || groupIndex < 0)
             return false;
 
-        var value = dataRow[groupField];
+        var value = GetRecordValue(record, ordinals[groupIndex]);
         if (Equals(value, currentGroup))
             return false;
 
@@ -378,8 +454,9 @@ public class ExcelExportService : IExcelExportService
     }
 
     private static void WriteRowCells(OpenXmlWriter writer,
-        DataRow dataRow,
+        IDataRecord record,
         IReadOnlyList<ColumnDefinition> columns,
+        IReadOnlyList<int> ordinals,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
         string? groupField,
         int groupIndexValue,
@@ -394,8 +471,8 @@ public class ExcelExportService : IExcelExportService
                 continue;
             }
 
-            var value = dataRow[col.FieldName];
-            if (value == DBNull.Value || value is null)
+            var value = GetRecordValue(record, ordinals[i]);
+            if (value is null)
             {
                 writer.WriteElement(new Cell());
                 continue;
@@ -404,41 +481,6 @@ public class ExcelExportService : IExcelExportService
             var cell = CreateCell(value, col, styleMap);
             writer.WriteElement(cell);
         }
-    }
-
-    private static DataRow CreateDisconnectedRow(IDataRecord record, IReadOnlyList<ColumnDefinition> columns)
-    {
-        var recordValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-        for (int i = 0; i < record.FieldCount; i++)
-        {
-            recordValues[record.GetName(i)] = record.IsDBNull(i) ? DBNull.Value : record.GetValue(i);
-        }
-
-        var table = new DataTable();
-        foreach (var col in columns)
-        {
-            table.Columns.Add(col.FieldName, typeof(object));
-        }
-
-        var row = table.NewRow();
-        foreach (var col in columns)
-        {
-            if (recordValues.TryGetValue(col.FieldName, out var value))
-            {
-                row[col.FieldName] = value ?? DBNull.Value;
-            }
-            else
-            {
-                row[col.FieldName] = DBNull.Value;
-            }
-        }
-
-        return row;
-    }
-
-    private static void ClearDataRow(DataRow row)
-    {
-        row.Table?.Clear();
     }
 
     private static void WriteAutoFilter(OpenXmlWriter writer, ExcelExportOptions options, int columnCount)
@@ -471,11 +513,8 @@ public class ExcelExportService : IExcelExportService
                 cell.CellValue = new CellValue((bool)value ? "1" : "0");
                 break;
             default:
-                cell.DataType = CellValues.InlineString;
-                var s = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
-                var inline = new InlineString();
-                inline.AppendChild(new Text(s));
-                cell.InlineString = inline;
+                cell.DataType = CellValues.String;
+                cell.CellValue = new CellValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty);
                 break;
         }
         return cell;
