@@ -163,7 +163,7 @@ public class ExcelExportService : IExcelExportService
                 {
                     Id = workbookPart.GetIdOfPart(worksheetPart),
                     SheetId = 1,
-                    Name = options.SheetName
+                    Name = ComposeSheetName(options.SheetName, 1)
                 });
                 workbookPart.Workbook.Save();
             }, ct);
