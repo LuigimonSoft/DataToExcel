@@ -312,6 +312,40 @@ public class ExcelExportServiceTests
     }
 
     [Fact]
+    public async Task GivenFirstGroupedValueIsNullWhenExportAsyncThenFirstRowStartsGroup()
+    {
+        var table = new DataTable();
+        table.Columns.Add("Category", typeof(string));
+        table.Columns.Add("Amount", typeof(int));
+        table.Rows.Add(DBNull.Value, 10);
+        table.Rows.Add(DBNull.Value, 20);
+        table.Rows.Add("A", 30);
+        var records = ToAsyncEnumerable(table);
+
+        var columns = new List<ColumnDefinition>
+        {
+            new("Category", "Category", ColumnDataType.String, Group: true),
+            new("Amount", "Amount", ColumnDataType.Number)
+        };
+        var service = new ExcelExportService(new ExcelStyleProvider());
+        using var ms = new MemoryStream();
+
+        var response = await service.ExportAsync(records, columns, ms, new ExcelExportOptions());
+
+        Assert.True(response.IsSuccess);
+        ms.Position = 0;
+        using var doc = SpreadsheetDocument.Open(ms, false);
+        var rows = doc.WorkbookPart!.WorksheetParts.First().Worksheet.GetFirstChild<SheetData>()!.Elements<Row>().ToList();
+
+        Assert.Null(rows[1].OutlineLevel);
+        Assert.Equal(string.Empty, rows[1].Elements<Cell>().First().InnerText);
+        Assert.Equal("10", rows[1].Elements<Cell>().Last().CellValue!.Text);
+        Assert.Equal((byte)1, rows[2].OutlineLevel!.Value);
+        Assert.Null(rows[3].OutlineLevel);
+        Assert.Equal("A", rows[3].Elements<Cell>().First().InnerText);
+    }
+
+    [Fact]
     public async Task GivenGroupedMiddleColumnWhenExportAsyncThenRowsShouldBeGrouped()
     {
         var table = BuildGroupedTable(withItem: true);

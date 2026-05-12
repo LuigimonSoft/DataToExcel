@@ -12,7 +12,6 @@ namespace DataToExcel.Services;
 
 public class ExcelExportService : IExcelExportService
 {
-    private const int GarbageCollectionRowInterval = 50_000;
     private readonly IExcelStyleProvider _styleProvider;
     public ExcelExportService(IExcelStyleProvider styleProvider)
         => _styleProvider = styleProvider;
@@ -76,7 +75,6 @@ public class ExcelExportService : IExcelExportService
                 seekableStream.Position = 0;
                 await seekableStream.CopyToAsync(output, 81920, ct);
                 await output.FlushAsync(ct);
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
             }
             else
             {
@@ -89,10 +87,7 @@ public class ExcelExportService : IExcelExportService
         {
             if (needsStaging)
             {
-                var tempName = (seekableStream as FileStream)?.Name;
                 await seekableStream.DisposeAsync();
-                if (!string.IsNullOrWhiteSpace(tempName) && File.Exists(tempName))
-                    File.Delete(tempName);
             }
         }
     }
@@ -350,6 +345,7 @@ public class ExcelExportService : IExcelExportService
     {
         var (groupIndexValue, groupField) = GetGroupInfo(context.Columns);
         object? currentGroup = null;
+        var hasCurrentGroup = false;
         var written = 0;
         int[]? ordinals = null;
 
@@ -368,13 +364,9 @@ public class ExcelExportService : IExcelExportService
 
             var record = current() ?? throw new InvalidOperationException("Expected record instance.");
             ordinals ??= BuildOrdinals(record, context.Columns);
-            WriteRow(writer, record, context.Columns, ordinals, context.StyleMap, groupField, groupIndexValue, ref currentGroup);
+            WriteRow(writer, record, context.Columns, ordinals, context.StyleMap, groupField, groupIndexValue,
+                ref currentGroup, ref hasCurrentGroup);
             written++;
-
-            if (written % GarbageCollectionRowInterval == 0)
-            {
-                GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false, compacting: false);
-            }
         }
     }
 
@@ -392,11 +384,16 @@ public class ExcelExportService : IExcelExportService
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
         string? groupField,
         int groupIndexValue,
-        ref object? currentGroup)
+        ref object? currentGroup,
+        ref bool hasCurrentGroup)
     {
-        var isGroupRow = IsNewGroupRow(record, ordinals, groupField, groupIndexValue, currentGroup, out var newGroupValue);
+        var isGroupRow = IsNewGroupRow(record, ordinals, groupField, groupIndexValue, currentGroup, hasCurrentGroup,
+            out var newGroupValue);
         if (isGroupRow)
+        {
             currentGroup = newGroupValue;
+            hasCurrentGroup = true;
+        }
 
         var row = CreateRow(groupField is not null, isGroupRow);
         writer.WriteStartElement(row);
@@ -453,6 +450,7 @@ public class ExcelExportService : IExcelExportService
         string? groupField,
         int groupIndex,
         object? currentGroup,
+        bool hasCurrentGroup,
         out object? newGroupValue)
     {
         newGroupValue = currentGroup;
@@ -460,7 +458,7 @@ public class ExcelExportService : IExcelExportService
             return false;
 
         var value = GetRecordValue(record, ordinals[groupIndex]);
-        if (Equals(value, currentGroup))
+        if (hasCurrentGroup && Equals(value, currentGroup))
             return false;
 
         newGroupValue = value;
