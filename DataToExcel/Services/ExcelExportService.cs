@@ -1,6 +1,8 @@
 using System.Data;
 using System.Globalization;
+using System.IO.Compression;
 using System.Text;
+using System.Xml;
 using DataToExcel.Models;
 using DataToExcel.Services.Interfaces;
 using DataToExcel.Utilities;
@@ -30,8 +32,8 @@ public class ExcelExportService : IExcelExportService
         CancellationToken ct = default)
         => options.SplitIntoMultipleSheets
             ? ExportMultipleSheetsAsync(data, columns, output, options, ct)
-            : ExportAsyncCore(output, options, (worksheetPart, styleMap)
-            => WriteWorksheetAsync(worksheetPart, columns, options, styleMap,
+            : ExportAsyncCore(output, options, (worksheetStream, styleMap)
+            => WriteWorksheetXmlAsync(worksheetStream, columns, options, styleMap,
                 writer => WriteRows(writer, data, columns, styleMap, ExcelExportLimits.MaxDataRowsPerSheet, ct)), ct);
 
     private Task<ServiceResponse<Stream>> ExportMultipleSheetsAsync(IAsyncEnumerable<IDataRecord> data,
@@ -132,7 +134,7 @@ public class ExcelExportService : IExcelExportService
 
     private async Task<ServiceResponse<Stream>> ExportAsyncCore(Stream output,
         ExcelExportOptions options,
-        Func<WorksheetPart, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeWorksheetAsync,
+        Func<Stream, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeWorksheetAsync,
         CancellationToken ct)
     {
         try
@@ -142,26 +144,8 @@ public class ExcelExportService : IExcelExportService
                 return new ServiceResponse<Stream> { IsSuccess = false, ErrorMessage = styleResponse.ErrorMessage };
             var stylesheet = styleResponse.Data;
 
-            return await ExportUsingSeekableStreamAsync(output, async seekableStream =>
-            {
-                using var document = SpreadsheetDocument.Create(seekableStream, SpreadsheetDocumentType.Workbook, true);
-                var workbookPart = document.AddWorkbookPart();
-                workbookPart.Workbook = new Workbook();
-                var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
-                stylesPart.Stylesheet = stylesheet;
-                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
-
-                await writeWorksheetAsync(worksheetPart, styleMap);
-
-                var sheets = workbookPart.Workbook.AppendChild(new Sheets());
-                sheets.AppendChild(new Sheet
-                {
-                    Id = workbookPart.GetIdOfPart(worksheetPart),
-                    SheetId = 1,
-                    Name = ComposeSheetName(options.SheetName, 1)
-                });
-                workbookPart.Workbook.Save();
-            }, ct);
+            await ExportSingleSheetPackageAsync(output, options, stylesheet, styleMap, writeWorksheetAsync, ct);
+            return new ServiceResponse<Stream>(output) { IsSuccess = true };
         }
         catch (Exception ex)
         {
@@ -169,102 +153,253 @@ public class ExcelExportService : IExcelExportService
         }
     }
 
+    private static async Task ExportSingleSheetPackageAsync(Stream output,
+        ExcelExportOptions options,
+        Stylesheet stylesheet,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        Func<Stream, IReadOnlyDictionary<PredefinedStyle, uint>, Task> writeWorksheetAsync,
+        CancellationToken ct)
+    {
+        using var archive = new ZipArchive(output, ZipArchiveMode.Create, leaveOpen: true);
+
+        await WriteContentTypesAsync(archive, ct);
+        await WriteRootRelationshipsAsync(archive, ct);
+        await WriteWorkbookAsync(archive, ComposeSheetName(options.SheetName, 1), ct);
+        await WriteWorkbookRelationshipsAsync(archive, ct);
+        await WriteStylesAsync(archive, stylesheet, ct);
+
+        var worksheetEntry = archive.CreateEntry("xl/worksheets/sheet1.xml", CompressionLevel.Fastest);
+        await using var worksheetStream = worksheetEntry.Open();
+        await writeWorksheetAsync(worksheetStream, styleMap);
+
+        await output.FlushAsync(ct);
+    }
+
+    private static async Task WriteContentTypesAsync(ZipArchive archive, CancellationToken ct)
+    {
+        var entry = archive.CreateEntry("[Content_Types].xml", CompressionLevel.Fastest);
+        await using var stream = entry.Open();
+        await using var writer = CreatePackageXmlWriter(stream);
+
+        await writer.WriteStartDocumentAsync();
+        await writer.WriteStartElementAsync(null, "Types", "http://schemas.openxmlformats.org/package/2006/content-types");
+        await WriteDefaultContentTypeAsync(writer, "rels", "application/vnd.openxmlformats-package.relationships+xml");
+        await WriteDefaultContentTypeAsync(writer, "xml", "application/xml");
+        await WriteOverrideContentTypeAsync(writer, "/xl/workbook.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml");
+        await WriteOverrideContentTypeAsync(writer, "/xl/worksheets/sheet1.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml");
+        await WriteOverrideContentTypeAsync(writer, "/xl/styles.xml", "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml");
+        await writer.WriteEndElementAsync();
+        await writer.WriteEndDocumentAsync();
+        await writer.FlushAsync();
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private static async Task WriteRootRelationshipsAsync(ZipArchive archive, CancellationToken ct)
+    {
+        var entry = archive.CreateEntry("_rels/.rels", CompressionLevel.Fastest);
+        await using var stream = entry.Open();
+        await using var writer = CreatePackageXmlWriter(stream);
+
+        await writer.WriteStartDocumentAsync();
+        await writer.WriteStartElementAsync(null, "Relationships", "http://schemas.openxmlformats.org/package/2006/relationships");
+        await WriteRelationshipAsync(writer, "rId1",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+            "xl/workbook.xml");
+        await writer.WriteEndElementAsync();
+        await writer.WriteEndDocumentAsync();
+        await writer.FlushAsync();
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private static async Task WriteWorkbookAsync(ZipArchive archive, string sheetName, CancellationToken ct)
+    {
+        var entry = archive.CreateEntry("xl/workbook.xml", CompressionLevel.Fastest);
+        await using var stream = entry.Open();
+        await using var writer = CreatePackageXmlWriter(stream);
+
+        await writer.WriteStartDocumentAsync();
+        await writer.WriteStartElementAsync(null, "workbook", "http://schemas.openxmlformats.org/spreadsheetml/2006/main");
+        await writer.WriteAttributeStringAsync("xmlns", "r", null, "http://schemas.openxmlformats.org/officeDocument/2006/relationships");
+        await writer.WriteStartElementAsync(null, "sheets", null);
+        await writer.WriteStartElementAsync(null, "sheet", null);
+        await writer.WriteAttributeStringAsync(null, "name", null, sheetName);
+        await writer.WriteAttributeStringAsync(null, "sheetId", null, "1");
+        await writer.WriteAttributeStringAsync("r", "id", null, "rId1");
+        await writer.WriteEndElementAsync(); // sheet
+        await writer.WriteEndElementAsync(); // sheets
+        await writer.WriteEndElementAsync(); // workbook
+        await writer.WriteEndDocumentAsync();
+        await writer.FlushAsync();
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private static async Task WriteWorkbookRelationshipsAsync(ZipArchive archive, CancellationToken ct)
+    {
+        var entry = archive.CreateEntry("xl/_rels/workbook.xml.rels", CompressionLevel.Fastest);
+        await using var stream = entry.Open();
+        await using var writer = CreatePackageXmlWriter(stream);
+
+        await writer.WriteStartDocumentAsync();
+        await writer.WriteStartElementAsync(null, "Relationships", "http://schemas.openxmlformats.org/package/2006/relationships");
+        await WriteRelationshipAsync(writer, "rId1",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet",
+            "worksheets/sheet1.xml");
+        await WriteRelationshipAsync(writer, "rId2",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles",
+            "styles.xml");
+        await writer.WriteEndElementAsync();
+        await writer.WriteEndDocumentAsync();
+        await writer.FlushAsync();
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private static async Task WriteStylesAsync(ZipArchive archive, Stylesheet stylesheet, CancellationToken ct)
+    {
+        var entry = archive.CreateEntry("xl/styles.xml", CompressionLevel.Fastest);
+        await using var stream = entry.Open();
+        stylesheet.Save(stream);
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private static XmlWriter CreatePackageXmlWriter(Stream stream)
+        => XmlWriter.Create(stream, new XmlWriterSettings
+        {
+            Async = true,
+            Encoding = Encoding.UTF8,
+            CloseOutput = false
+        });
+
+    private static async Task WriteDefaultContentTypeAsync(XmlWriter writer, string extension, string contentType)
+    {
+        await writer.WriteStartElementAsync(null, "Default", null);
+        await writer.WriteAttributeStringAsync(null, "Extension", null, extension);
+        await writer.WriteAttributeStringAsync(null, "ContentType", null, contentType);
+        await writer.WriteEndElementAsync();
+    }
+
+    private static async Task WriteOverrideContentTypeAsync(XmlWriter writer, string partName, string contentType)
+    {
+        await writer.WriteStartElementAsync(null, "Override", null);
+        await writer.WriteAttributeStringAsync(null, "PartName", null, partName);
+        await writer.WriteAttributeStringAsync(null, "ContentType", null, contentType);
+        await writer.WriteEndElementAsync();
+    }
+
+    private static async Task WriteRelationshipAsync(XmlWriter writer, string id, string type, string target)
+    {
+        await writer.WriteStartElementAsync(null, "Relationship", null);
+        await writer.WriteAttributeStringAsync(null, "Id", null, id);
+        await writer.WriteAttributeStringAsync(null, "Type", null, type);
+        await writer.WriteAttributeStringAsync(null, "Target", null, target);
+        await writer.WriteEndElementAsync();
+    }
+
     private static async Task WriteWorksheetAsync(WorksheetPart worksheetPart,
         IReadOnlyList<ColumnDefinition> columns,
         ExcelExportOptions options,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        Func<OpenXmlWriter, Task> writeRowsAsync)
+        Func<XmlWriter, Task> writeRowsAsync)
     {
-        using var writer = OpenXmlWriter.Create(worksheetPart);
-        writer.WriteStartElement(new Worksheet());
+        await using var stream = worksheetPart.GetStream(FileMode.Create, FileAccess.Write);
+        await WriteWorksheetXmlAsync(stream, columns, options, styleMap, writeRowsAsync);
+    }
+
+    private static async Task WriteWorksheetXmlAsync(Stream stream,
+        IReadOnlyList<ColumnDefinition> columns,
+        ExcelExportOptions options,
+        IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
+        Func<XmlWriter, Task> writeRowsAsync)
+    {
+        await using var writer = XmlWriter.Create(stream, new XmlWriterSettings
+        {
+            Async = true,
+            Encoding = Encoding.UTF8,
+            CloseOutput = false
+        });
+        await writer.WriteStartDocumentAsync();
+        await writer.WriteStartElementAsync(null, "worksheet", "http://schemas.openxmlformats.org/spreadsheetml/2006/main");
 
         WriteSheetViews(writer, options);
         WriteColumns(writer, columns);
         WriteSheetFormatProperties(writer, columns);
 
-        writer.WriteStartElement(new SheetData());
+        writer.WriteStartElement("sheetData");
         WriteHeader(writer, columns, styleMap);
         await writeRowsAsync(writer);
-        writer.WriteEndElement(); // SheetData
+        writer.WriteEndElement(); // sheetData
 
         WriteAutoFilter(writer, options, columns.Count);
 
-        writer.WriteEndElement(); // Worksheet
-        writer.Close();
+        writer.WriteEndElement(); // worksheet
+        await writer.WriteEndDocumentAsync();
+        await writer.FlushAsync();
     }
 
-    private static void WriteSheetViews(OpenXmlWriter writer, ExcelExportOptions options)
+    private static void WriteSheetViews(XmlWriter writer, ExcelExportOptions options)
     {
         if (!options.FreezeHeader) return;
-        writer.WriteStartElement(new SheetViews());
-        writer.WriteElement(new SheetView
-        {
-            WorkbookViewId = 0,
-            Pane = new Pane
-            {
-                VerticalSplit = 1,
-                TopLeftCell = "A2",
-                ActivePane = PaneValues.BottomLeft,
-                State = PaneStateValues.Frozen
-            }
-        });
-        writer.WriteEndElement(); // SheetViews
+        writer.WriteStartElement("sheetViews");
+        writer.WriteStartElement("sheetView");
+        writer.WriteAttributeString("workbookViewId", "0");
+        writer.WriteStartElement("pane");
+        writer.WriteAttributeString("ySplit", "1");
+        writer.WriteAttributeString("topLeftCell", "A2");
+        writer.WriteAttributeString("activePane", "bottomLeft");
+        writer.WriteAttributeString("state", "frozen");
+        writer.WriteEndElement(); // pane
+        writer.WriteEndElement(); // sheetView
+        writer.WriteEndElement(); // sheetViews
     }
 
-    private static void WriteSheetFormatProperties(OpenXmlWriter writer, IReadOnlyList<ColumnDefinition> columns)
+    private static void WriteSheetFormatProperties(XmlWriter writer, IReadOnlyList<ColumnDefinition> columns)
     {
         if (!columns.Any(c => c.Group)) return;
-        writer.WriteElement(new SheetFormatProperties { OutlineLevelRow = 1 });
+        writer.WriteStartElement("sheetFormatPr");
+        writer.WriteAttributeString("outlineLevelRow", "1");
+        writer.WriteEndElement();
     }
 
-    private static void WriteColumns(OpenXmlWriter writer, IReadOnlyList<ColumnDefinition> columns)
+    private static void WriteColumns(XmlWriter writer, IReadOnlyList<ColumnDefinition> columns)
     {
         if (!columns.Any(c => c.Width.HasValue || c.Hidden)) return;
-        writer.WriteStartElement(new Columns());
+        writer.WriteStartElement("cols");
         uint i = 1;
         foreach (var col in columns)
         {
             if (col.Width.HasValue || col.Hidden)
             {
-                var column = new Column
-                {
-                    Min = i,
-                    Max = i
-                };
+                writer.WriteStartElement("col");
+                writer.WriteAttributeString("min", i.ToString(CultureInfo.InvariantCulture));
+                writer.WriteAttributeString("max", i.ToString(CultureInfo.InvariantCulture));
                 if (col.Hidden)
                 {
-                    column.Hidden = true;
+                    writer.WriteAttributeString("hidden", "1");
                 }
                 if (col.Width.HasValue)
                 {
-                    column.Width = col.Width.Value;
-                    column.CustomWidth = true;
+                    writer.WriteAttributeString("width", col.Width.Value.ToString(CultureInfo.InvariantCulture));
+                    writer.WriteAttributeString("customWidth", "1");
                 }
-                writer.WriteElement(column);
+                writer.WriteEndElement();
             }
             i++;
         }
-        writer.WriteEndElement(); // Columns
+        writer.WriteEndElement(); // cols
     }
 
-    private static void WriteHeader(OpenXmlWriter writer,
+    private static void WriteHeader(XmlWriter writer,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap)
     {
-        writer.WriteStartElement(new Row());
+        writer.WriteStartElement("row");
         foreach (var col in columns)
         {
-            writer.WriteElement(new Cell
-            {
-                DataType = CellValues.String,
-                CellValue = new CellValue(col.Title ?? string.Empty),
-                StyleIndex = styleMap[PredefinedStyle.Header]
-            });
+            WriteCell(writer, col.Title ?? string.Empty, CellValues.String, styleMap[PredefinedStyle.Header]);
         }
-        writer.WriteEndElement(); // Row
+        writer.WriteEndElement(); // row
     }
 
-    private static async Task WriteRows(OpenXmlWriter writer,
+    private static async Task WriteRows(XmlWriter writer,
         IAsyncEnumerable<IDataRecord> data,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
@@ -278,7 +413,7 @@ public class ExcelExportService : IExcelExportService
             current: () => enumerator.Current);
     }
 
-    private static async Task WriteRows(OpenXmlWriter writer,
+    private static async Task WriteRows(XmlWriter writer,
         BufferedAsyncRecordEnumerator data,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
@@ -297,7 +432,7 @@ public class ExcelExportService : IExcelExportService
         IReadOnlyList<ColumnDefinition> columns,
         ExcelExportOptions options,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
-        Func<OpenXmlWriter, Task> writeRowsAsync)
+        Func<XmlWriter, Task> writeRowsAsync)
     {
         var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
         await WriteWorksheetAsync(worksheetPart, columns, options, styleMap, writeRowsAsync);
@@ -338,7 +473,7 @@ public class ExcelExportService : IExcelExportService
         return (groupInfo.i, columns[groupInfo.i].FieldName);
     }
 
-    private static async Task WriteRowsCoreAsync(OpenXmlWriter writer,
+    private static async Task WriteRowsCoreAsync(XmlWriter writer,
         WriteRowsContext context,
         Func<Task<bool>> moveNextAsync,
         Func<IDataRecord?> current)
@@ -364,8 +499,16 @@ public class ExcelExportService : IExcelExportService
 
             var record = current() ?? throw new InvalidOperationException("Expected record instance.");
             ordinals ??= BuildOrdinals(record, context.Columns);
+            var isGroupRow = IsNewGroupRow(record, ordinals, groupField, groupIndexValue, currentGroup,
+                hasCurrentGroup, out var newGroupValue);
+            if (isGroupRow)
+            {
+                currentGroup = newGroupValue;
+                hasCurrentGroup = true;
+            }
+
             WriteRow(writer, record, context.Columns, ordinals, context.StyleMap, groupField, groupIndexValue,
-                ref currentGroup, ref hasCurrentGroup);
+                isGroupRow);
             written++;
         }
     }
@@ -377,26 +520,16 @@ public class ExcelExportService : IExcelExportService
         bool EnforceLimit,
         CancellationToken CancellationToken);
 
-    private static void WriteRow(OpenXmlWriter writer,
+    private static void WriteRow(XmlWriter writer,
         IDataRecord record,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyList<int> ordinals,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap,
         string? groupField,
         int groupIndexValue,
-        ref object? currentGroup,
-        ref bool hasCurrentGroup)
+        bool isGroupRow)
     {
-        var isGroupRow = IsNewGroupRow(record, ordinals, groupField, groupIndexValue, currentGroup, hasCurrentGroup,
-            out var newGroupValue);
-        if (isGroupRow)
-        {
-            currentGroup = newGroupValue;
-            hasCurrentGroup = true;
-        }
-
-        var row = CreateRow(groupField is not null, isGroupRow);
-        writer.WriteStartElement(row);
+        WriteRowStart(writer, groupField is not null, isGroupRow);
         WriteRowCells(writer, record, columns, ordinals, styleMap, groupField, groupIndexValue, isGroupRow);
         writer.WriteEndElement();
     }
@@ -465,15 +598,14 @@ public class ExcelExportService : IExcelExportService
         return true;
     }
 
-    private static Row CreateRow(bool hasGroup, bool isGroupRow)
+    private static void WriteRowStart(XmlWriter writer, bool hasGroup, bool isGroupRow)
     {
-        var row = new Row();
+        writer.WriteStartElement("row");
         if (hasGroup && !isGroupRow)
-            row.OutlineLevel = 1;
-        return row;
+            writer.WriteAttributeString("outlineLevel", "1");
     }
 
-    private static void WriteRowCells(OpenXmlWriter writer,
+    private static void WriteRowCells(XmlWriter writer,
         IDataRecord record,
         IReadOnlyList<ColumnDefinition> columns,
         IReadOnlyList<int> ordinals,
@@ -487,57 +619,117 @@ public class ExcelExportService : IExcelExportService
             var col = columns[i];
             if (groupField is not null && i == groupIndexValue && !isGroupRow)
             {
-                writer.WriteElement(new Cell());
+                WriteBlankCell(writer);
                 continue;
             }
 
-            var value = GetRecordValue(record, ordinals[i]);
-            if (value is null)
+            var ordinal = ordinals[i];
+            if (ordinal < 0 || record.IsDBNull(ordinal))
             {
-                writer.WriteElement(new Cell());
+                WriteBlankCell(writer);
                 continue;
             }
 
-            var cell = CreateCell(value, col, styleMap);
-            writer.WriteElement(cell);
+            WriteCell(writer, record, ordinal, col, styleMap);
         }
     }
 
-    private static void WriteAutoFilter(OpenXmlWriter writer, ExcelExportOptions options, int columnCount)
+    private static void WriteAutoFilter(XmlWriter writer, ExcelExportOptions options, int columnCount)
     {
         if (!options.AutoFilter) return;
         var endCol = GetColumnName(columnCount);
-        writer.WriteElement(new AutoFilter { Reference = $"A1:{endCol}1" });
+        writer.WriteStartElement("autoFilter");
+        writer.WriteAttributeString("ref", $"A1:{endCol}1");
+        writer.WriteEndElement();
     }
 
-    private static Cell CreateCell(object value, ColumnDefinition col,
+    private static void WriteCell(XmlWriter writer, IDataRecord record, int ordinal, ColumnDefinition col,
         IReadOnlyDictionary<PredefinedStyle, uint> styleMap)
     {
         var style = col.Style ?? GetStyleFromDataType(col.DataType);
-        var cell = new Cell { StyleIndex = styleMap[style] };
         switch (col.DataType)
         {
             case ColumnDataType.Number:
             case ColumnDataType.Currency:
             case ColumnDataType.Percentage:
-                cell.DataType = CellValues.Number;
-                cell.CellValue = new CellValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty);
+                WriteNumberCell(writer, record, ordinal, styleMap[style]);
                 break;
             case ColumnDataType.DateTime:
-                cell.DataType = CellValues.Number;
-                var dt = Convert.ToDateTime(value, CultureInfo.InvariantCulture);
-                cell.CellValue = new CellValue(dt.ToOADate().ToString(CultureInfo.InvariantCulture));
+                WriteDateTimeCell(writer, record, ordinal, styleMap[style]);
                 break;
             case ColumnDataType.Boolean:
-                cell.DataType = CellValues.Boolean;
-                cell.CellValue = new CellValue((bool)value ? "1" : "0");
+                WriteCell(writer, GetBooleanCellValue(record, ordinal), CellValues.Boolean, styleMap[style]);
                 break;
             default:
-                cell.DataType = CellValues.String;
-                cell.CellValue = new CellValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty);
+                WriteCell(writer, GetStringCellValue(record, ordinal), CellValues.String, styleMap[style]);
                 break;
         }
-        return cell;
+    }
+
+    private static void WriteNumberCell(XmlWriter writer, IDataRecord record, int ordinal, uint styleIndex)
+    {
+        writer.WriteStartElement("c");
+        writer.WriteAttributeString("s", styleIndex.ToString(CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("t", "n");
+        writer.WriteStartElement("v");
+
+        var fieldType = record.GetFieldType(ordinal);
+        if (fieldType == typeof(int))
+            writer.WriteValue(record.GetInt32(ordinal));
+        else if (fieldType == typeof(long))
+            writer.WriteValue(record.GetInt64(ordinal));
+        else if (fieldType == typeof(short))
+            writer.WriteValue(record.GetInt16(ordinal));
+        else if (fieldType == typeof(decimal))
+            writer.WriteValue(record.GetDecimal(ordinal));
+        else if (fieldType == typeof(double))
+            writer.WriteValue(record.GetDouble(ordinal));
+        else if (fieldType == typeof(float))
+            writer.WriteValue(record.GetFloat(ordinal));
+        else
+            writer.WriteString(Convert.ToString(record.GetValue(ordinal), CultureInfo.InvariantCulture) ?? string.Empty);
+
+        writer.WriteEndElement(); // v
+        writer.WriteEndElement(); // c
+    }
+
+    private static void WriteDateTimeCell(XmlWriter writer, IDataRecord record, int ordinal, uint styleIndex)
+    {
+        var value = record.GetFieldType(ordinal) == typeof(DateTime)
+            ? record.GetDateTime(ordinal)
+            : Convert.ToDateTime(record.GetValue(ordinal), CultureInfo.InvariantCulture);
+        WriteCell(writer, value.ToOADate().ToString(CultureInfo.InvariantCulture), CellValues.Number, styleIndex);
+    }
+
+    private static string GetBooleanCellValue(IDataRecord record, int ordinal)
+    {
+        if (record.GetFieldType(ordinal) == typeof(bool))
+            return record.GetBoolean(ordinal) ? "1" : "0";
+        return Convert.ToBoolean(record.GetValue(ordinal), CultureInfo.InvariantCulture) ? "1" : "0";
+    }
+
+    private static string GetStringCellValue(IDataRecord record, int ordinal)
+    {
+        if (record.GetFieldType(ordinal) == typeof(string))
+            return record.GetString(ordinal);
+        return Convert.ToString(record.GetValue(ordinal), CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
+    private static void WriteCell(XmlWriter writer, string value, CellValues dataType, uint styleIndex)
+    {
+        writer.WriteStartElement("c");
+        writer.WriteAttributeString("s", styleIndex.ToString(CultureInfo.InvariantCulture));
+        writer.WriteAttributeString("t", GetCellDataTypeValue(dataType));
+        writer.WriteStartElement("v");
+        writer.WriteString(value);
+        writer.WriteEndElement(); // v
+        writer.WriteEndElement(); // c
+    }
+
+    private static void WriteBlankCell(XmlWriter writer)
+    {
+        writer.WriteStartElement("c");
+        writer.WriteEndElement();
     }
 
     private static PredefinedStyle GetStyleFromDataType(ColumnDataType type) => type switch
@@ -549,6 +741,15 @@ public class ExcelExportService : IExcelExportService
         ColumnDataType.Percentage => PredefinedStyle.Percentage,
         _ => PredefinedStyle.Text
     };
+
+    private static string GetCellDataTypeValue(CellValues dataType)
+    {
+        if (dataType == CellValues.Number)
+            return "n";
+        if (dataType == CellValues.Boolean)
+            return "b";
+        return "str";
+    }
 
     private static string GetColumnName(int index)
     {
